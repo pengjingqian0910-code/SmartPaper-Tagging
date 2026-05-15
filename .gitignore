@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Data
+data/*.db
+data/chroma/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+
+# JVM crash logs
+hs_err_pid*.log
+replay_pid*.log
+
+# pip install artifacts (e.g. leftover '=2.7.0' file)
+=[0-9]*
+
+# Claude Code memory (private AI session notes)
+.claude/

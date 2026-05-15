@@ -1,0 +1,13 @@
+# Normalize line endings to LF everywhere, checkout as-is on Windows
+* text=auto eol=lf
+
+# Shell scripts must be LF (won't run on Linux if CRLF)
+*.sh text eol=lf
+
+# Windows-only scripts
+*.bat text eol=crlf
+
+# Binaries
+*.png binary
+*.jpg binary
+*.db  binary

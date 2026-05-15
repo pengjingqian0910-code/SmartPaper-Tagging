@@ -1,0 +1,730 @@
+"""
+文獻分析視圖
+三個子頁：
+1. 自動大綱生成 — 主題 → 段落結構 + 每段推薦引用
+2. 文獻回顧表格 — 勾選欄位 → LLM 萃取 → Excel
+3. 論文比較     — 選 2-6 篇 → LLM 比較維度表
+"""
+
+import flet as ft
+from typing import Optional
+
+from ...services.literature_analyzer import (
+    LiteratureAnalyzer, FIXED_COLUMNS, LLM_COLUMNS,
+)
+from ...database.sqlite_db import SQLiteDB
+from ...config import GEMINI_API_KEY
+
+
+_POSITION_COLOR = {
+    "開頭": "#388E3C",   # green 700
+    "中間": "#1976D2",   # blue 700
+    "結尾": "#7B1FA2",   # purple 700
+}
+
+
+class LiteratureView:
+    """文獻分析主視圖"""
+
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.analyzer: Optional[LiteratureAnalyzer] = None
+        self.db = SQLiteDB()
+
+    def build(self) -> ft.Control:
+        self.analyzer = LiteratureAnalyzer()
+
+        self.status = ft.Text("", size=12, color=ft.colors.GREY_600)
+        self.progress = ft.ProgressRing(visible=False, width=20, height=20)
+
+        self.tabs = ft.Tabs(
+            selected_index=0,
+            animation_duration=200,
+            tabs=[
+                ft.Tab(text="自動大綱生成", icon="auto_awesome", content=self._build_outline_tab()),
+                ft.Tab(text="文獻回顧表格", icon="table_chart", content=self._build_review_tab()),
+                ft.Tab(text="論文比較分析", icon="compare_arrows", content=self._build_compare_tab()),
+            ],
+            expand=True,
+        )
+
+        return ft.Column(
+            [
+                ft.Text("文獻分析", size=28, weight=ft.FontWeight.BOLD),
+                ft.Text("大綱生成 · 文獻回顧表格 · 論文比較，只需要摘要，不需全文", size=14, color=ft.colors.GREY_600),
+                ft.Divider(height=16),
+                self.tabs,
+                ft.Row([self.progress, self.status], spacing=8),
+            ],
+            spacing=8,
+            expand=True,
+        )
+
+    # ════════════════════════════════════════════════════════════
+    # Tab 1: 自動大綱生成
+    # ════════════════════════════════════════════════════════════
+
+    def _build_outline_tab(self) -> ft.Control:
+        self.outline_topic = ft.TextField(
+            label="研究主題",
+            hint_text="例如：深度學習在醫療影像診斷的應用",
+            expand=True,
+        )
+        self.outline_n = ft.Dropdown(
+            label="候選論文數",
+            value="15",
+            options=[ft.dropdown.Option(str(n), f"{n} 篇") for n in [10, 15, 20, 25]],
+            width=120,
+        )
+        self.outline_results = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=10, expand=True)
+
+        self.outline_export_btn = ft.OutlinedButton(
+            "匯出 Markdown",
+            icon="download",
+            on_click=self._on_outline_export,
+            visible=False,
+        )
+        self._outline_data = None
+
+        gen_btn = ft.ElevatedButton(
+            "生成大綱",
+            icon="auto_awesome",
+            on_click=self._on_gen_outline,
+            disabled=not GEMINI_API_KEY,
+            style=ft.ButtonStyle(bgcolor=ft.colors.INDIGO_600, color=ft.colors.WHITE),
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row([self.outline_topic, self.outline_n, gen_btn, self.outline_export_btn], spacing=10),
+                    ft.Text("系統將自動建議段落結構，並為每個段落推薦應引用的論文", size=11, color=ft.colors.GREY_600),
+                    ft.Divider(height=8),
+                    ft.Container(content=self.outline_results, expand=True),
+                ],
+                spacing=8,
+                expand=True,
+            ),
+            padding=ft.padding.only(top=16),
+            expand=True,
+        )
+
+    def _on_gen_outline(self, e):
+        topic = self.outline_topic.value.strip()
+        if not topic:
+            return
+        self._set_busy("生成大綱中...")
+        self.outline_results.controls.clear()
+        self.outline_export_btn.visible = False
+        self.page.update()
+
+        def _progress(msg):
+            self.status.value = msg
+            self.page.update()
+
+        try:
+            sections = self.analyzer.generate_outline(
+                topic=topic,
+                n_candidates=int(self.outline_n.value or "15"),
+                progress_callback=_progress,
+            )
+            self._outline_data = sections
+            self._render_outline(sections)
+            self.outline_export_btn.visible = True
+            self.status.value = f"完成：生成 {len(sections)} 個段落，共推薦 {sum(len(s.papers) for s in sections)} 篇引用"
+        except Exception as ex:
+            self.status.value = f"錯誤：{ex}"
+        finally:
+            self._set_idle()
+
+    def _render_outline(self, sections):
+        for sec in sections:
+            # 段落標題
+            header = ft.Container(
+                content=ft.Row([
+                    ft.Icon("article", color=ft.colors.INDIGO, size=18),
+                    ft.Text(sec.title, size=16, weight=ft.FontWeight.BOLD, color=ft.colors.INDIGO_900),
+                    ft.Container(
+                        content=ft.Text(f"{len(sec.papers)} 篇引用", size=10, color=ft.colors.WHITE),
+                        bgcolor=ft.colors.INDIGO_400,
+                        padding=ft.padding.symmetric(horizontal=8, vertical=2),
+                        border_radius=10,
+                    ),
+                ], spacing=8),
+                padding=ft.padding.only(top=4, bottom=4),
+            )
+
+            # 段落說明 + 寫作提示
+            desc_card = ft.Container(
+                content=ft.Column([
+                    ft.Text(sec.description, size=12, color=ft.colors.GREY_800),
+                    ft.Row([
+                        ft.Icon("lightbulb", size=13, color=ft.colors.AMBER_700),
+                        ft.Text(sec.writing_hint, size=11, color=ft.colors.AMBER_900, italic=True, expand=True),
+                    ], spacing=4) if sec.writing_hint else ft.Container(),
+                ], spacing=4),
+                padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                bgcolor=ft.colors.INDIGO_50,
+                border_radius=6,
+            )
+
+            # 引用論文卡片
+            paper_cards = []
+            for op in sec.papers:
+                pos_color = _POSITION_COLOR.get(op.cite_position, ft.colors.GREY_700)
+                authors_str = ""
+                if op.paper.authors:
+                    authors_str = f" — {op.paper.authors[0]}" + (" et al." if len(op.paper.authors) > 1 else "")
+                year_str = f" ({op.paper.year})" if op.paper.year else ""
+
+                paper_cards.append(ft.Container(
+                    content=ft.Row([
+                        ft.Container(
+                            content=ft.Text(op.cite_position, size=9, color=ft.colors.WHITE),
+                            bgcolor=pos_color,
+                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                            border_radius=8,
+                            width=45,
+                        ),
+                        ft.Column([
+                            ft.Text(
+                                f"{op.paper.title[:60]}{'…' if len(op.paper.title) > 60 else ''}{year_str}{authors_str}",
+                                size=11, weight=ft.FontWeight.W_500,
+                            ),
+                            ft.Row([
+                                ft.Text("引用原因：", size=10, color=ft.colors.GREY_600),
+                                ft.Text(op.cite_reason, size=10, color=ft.colors.GREY_700),
+                                ft.Container(width=8),
+                                ft.Text("核心概念：", size=10, color=ft.colors.GREY_600),
+                                ft.Text(op.key_concept, size=10, color=ft.colors.TEAL_700),
+                            ], spacing=2),
+                        ], spacing=2, expand=True),
+                    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
+                    padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                    border=ft.border.all(1, ft.colors.GREY_200),
+                    border_radius=6,
+                    bgcolor=ft.colors.WHITE,
+                ))
+
+            section_card = ft.Container(
+                content=ft.Column(
+                    [header, desc_card] + (paper_cards if paper_cards else [
+                        ft.Text("（此段落未找到適合引用的論文）", size=11, color=ft.colors.GREY_500, italic=True)
+                    ]),
+                    spacing=6,
+                ),
+                padding=12,
+                border=ft.border.all(1, ft.colors.INDIGO_100),
+                border_radius=8,
+                bgcolor=ft.colors.WHITE,
+                margin=ft.margin.only(bottom=8),
+            )
+            self.outline_results.controls.append(section_card)
+
+        self.page.update()
+
+    def _on_outline_export(self, e):
+        if not self._outline_data:
+            return
+        lines = [f"# 大綱：{self.outline_topic.value}\n"]
+        for sec in self._outline_data:
+            lines.append(f"## {sec.title}")
+            lines.append(f"_{sec.description}_")
+            if sec.writing_hint:
+                lines.append(f"\n💡 **寫作提示**：{sec.writing_hint}")
+            if sec.papers:
+                lines.append("\n**推薦引用**：")
+                for op in sec.papers:
+                    year = f" ({op.paper.year})" if op.paper.year else ""
+                    lines.append(f"- [{op.cite_position}] **{op.paper.title}**{year}")
+                    lines.append(f"  - 引用原因：{op.cite_reason}  核心概念：{op.key_concept}")
+            lines.append("")
+
+        import tempfile, webbrowser
+        from pathlib import Path
+        tmp = tempfile.NamedTemporaryFile(suffix=".md", prefix="outline_", delete=False, mode="w", encoding="utf-8")
+        tmp.write("\n".join(lines))
+        tmp.close()
+        self.status.value = f"Markdown 已儲存：{tmp.name}"
+        self.page.update()
+
+    # ════════════════════════════════════════════════════════════
+    # Tab 2: 文獻回顧表格
+    # ════════════════════════════════════════════════════════════
+
+    def _build_review_tab(self) -> ft.Control:
+        # 固定欄位勾選
+        self._fixed_checks: dict[str, ft.Checkbox] = {
+            col: ft.Checkbox(label=col, value=(col in ["標題", "作者", "年份", "期刊/會議"]))
+            for col in FIXED_COLUMNS
+        }
+        # LLM 欄位勾選
+        self._llm_checks: dict[str, ft.Checkbox] = {
+            col: ft.Checkbox(label=col, value=(col in ["研究方法", "主要貢獻", "研究限制"]))
+            for col in LLM_COLUMNS
+        }
+        # 自訂欄位
+        self.custom_cols_input = ft.TextField(
+            label="自訂欄位（逗號分隔）",
+            hint_text="例如：倫理考量, 開源狀態",
+            expand=True,
+        )
+
+        # 論文勾選清單
+        all_papers = self.db.get_all(limit=2000)
+        self._all_review_papers: dict[int, object] = {p.id: p for p in all_papers}
+        self._review_selected: dict[int, ft.Checkbox] = {}
+
+        review_checkboxes = []
+        for p in all_papers[:500]:
+            cb = ft.Checkbox(
+                label=f"[{p.id}] {p.title[:60]}{'…' if len(p.title) > 60 else ''} ({p.year or '?'})",
+                value=False,
+                on_change=lambda _: (self._update_review_count(), self.page.update()),
+            )
+            self._review_selected[p.id] = cb
+            review_checkboxes.append(cb)
+
+        self.review_papers_list = ft.Column(
+            controls=review_checkboxes,
+            scroll=ft.ScrollMode.AUTO,
+            height=200,
+            spacing=2,
+        )
+
+        self.review_search = ft.TextField(
+            label="篩選論文（輸入關鍵字）",
+            expand=True,
+            on_change=self._on_review_search,
+        )
+        self._review_selected_count = ft.Text("已選 0 篇", size=11, color=ft.colors.BLUE_700)
+
+        def _select_all(e):
+            for pid, cb in self._review_selected.items():
+                if cb.visible:
+                    cb.value = True
+            self._update_review_count()
+            self.page.update()
+
+        def _deselect_all(e):
+            for cb in self._review_selected.values():
+                cb.value = False
+            self._update_review_count()
+            self.page.update()
+
+        self.review_results = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=4, expand=True)
+        self._review_rows = None
+
+        self.review_export_btn = ft.ElevatedButton(
+            "匯出 Excel",
+            icon="table_chart",
+            on_click=self._on_review_export,
+            visible=False,
+            style=ft.ButtonStyle(bgcolor=ft.colors.GREEN_700, color=ft.colors.WHITE),
+        )
+        self.review_file_picker = ft.FilePicker()
+
+        self.review_file_picker.on_result = self._on_review_save
+        self.page.overlay.append(self.review_file_picker)
+
+        gen_btn = ft.ElevatedButton(
+            "生成表格",
+            icon="table_chart",
+            on_click=self._on_gen_review,
+            style=ft.ButtonStyle(bgcolor=ft.colors.BLUE_700, color=ft.colors.WHITE),
+        )
+
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Column([
+                        ft.Text("固定欄位（從資料庫取得）", size=12, weight=ft.FontWeight.BOLD),
+                        ft.Row(list(self._fixed_checks.values()), wrap=True, spacing=4),
+                    ], expand=True),
+                    ft.VerticalDivider(),
+                    ft.Column([
+                        ft.Text("LLM 萃取欄位（從摘要生成）", size=12, weight=ft.FontWeight.BOLD),
+                        ft.Row(list(self._llm_checks.values()), wrap=True, spacing=4),
+                    ], expand=True),
+                ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.START),
+                ft.Row([self.custom_cols_input], spacing=8),
+                ft.Divider(height=4),
+                ft.Text("選擇要納入表格的論文", size=12, weight=ft.FontWeight.BOLD),
+                ft.Row([
+                    self.review_search,
+                    ft.TextButton("全選", on_click=_select_all),
+                    ft.TextButton("全不選", on_click=_deselect_all),
+                    self._review_selected_count,
+                ], spacing=8),
+                ft.Container(
+                    content=self.review_papers_list,
+                    border=ft.border.all(1, ft.colors.GREY_300),
+                    border_radius=6,
+                    padding=8,
+                ),
+                ft.Row([gen_btn, self.review_export_btn], spacing=10),
+                ft.Divider(height=8),
+                ft.Container(content=self.review_results, expand=True),
+            ], spacing=8, expand=True),
+            padding=ft.padding.only(top=16),
+            expand=True,
+        )
+
+    def _on_review_search(self, e):
+        keyword = (e.control.value or "").lower()
+        for pid, cb in self._review_selected.items():
+            paper = self._all_review_papers.get(pid)
+            if paper:
+                cb.visible = not keyword or keyword in paper.title.lower()
+        self.page.update()
+
+    def _update_review_count(self):
+        n = sum(1 for cb in self._review_selected.values() if cb.value)
+        self._review_selected_count.value = f"已選 {n} 篇"
+
+    def _on_gen_review(self, e):
+        fixed = [col for col, cb in self._fixed_checks.items() if cb.value]
+        llm = [col for col, cb in self._llm_checks.items() if cb.value]
+        custom = [c.strip() for c in self.custom_cols_input.value.split(",") if c.strip()]
+
+        if not fixed and not llm and not custom:
+            self.status.value = "請至少勾選一個欄位"
+            self.page.update()
+            return
+
+        # 取得勾選的論文
+        papers = [
+            self._all_review_papers[pid]
+            for pid, cb in self._review_selected.items()
+            if cb.value and pid in self._all_review_papers
+        ]
+
+        if not papers:
+            self.status.value = "請勾選至少一篇論文"
+            self.page.update()
+            return
+
+        self._set_busy(f"生成文獻回顧表格（共 {len(papers)} 篇）...")
+        self.review_results.controls.clear()
+        self.review_export_btn.visible = False
+        self.page.update()
+
+        def _progress(cur, total):
+            self.status.value = f"分析中 [{cur}/{total}]..."
+            self.page.update()
+
+        try:
+            rows = self.analyzer.generate_review_table(
+                papers=papers,
+                fixed_cols=fixed,
+                llm_cols=llm,
+                custom_cols=custom if custom else None,
+                progress_callback=_progress if llm or custom else None,
+            )
+            self._review_rows = rows
+            self._render_review_table(rows)
+            self.review_export_btn.visible = True
+            self.status.value = f"表格生成完成：{len(rows)} 篇 × {len(rows[0]) if rows else 0} 欄"
+        except Exception as ex:
+            self.status.value = f"錯誤：{ex}"
+        finally:
+            self._set_idle()
+
+    def _render_review_table(self, rows: list[dict]):
+        if not rows:
+            return
+        headers = list(rows[0].keys())
+
+        col_defs = [ft.DataColumn(ft.Text(h, size=11, weight=ft.FontWeight.BOLD)) for h in headers]
+        data_rows = []
+        for row in rows:
+            cells = []
+            for h in headers:
+                val = str(row.get(h, "-"))
+                cells.append(ft.DataCell(
+                    ft.Container(
+                        content=ft.Text(val[:80] + ("…" if len(val) > 80 else ""), size=10, tooltip=val),
+                        width=120,
+                    )
+                ))
+            data_rows.append(ft.DataRow(cells=cells))
+
+        table = ft.DataTable(
+            columns=col_defs,
+            rows=data_rows,
+            border=ft.border.all(1, ft.colors.GREY_300),
+            border_radius=6,
+            heading_row_height=36,
+            data_row_min_height=40,
+            column_spacing=8,
+        )
+        self.review_results.controls.append(
+            ft.Container(content=table, expand=True)
+        )
+        self.page.update()
+
+    def _on_review_export(self, e):
+        self.review_file_picker.save_file(
+            allowed_extensions=["xlsx"],
+            file_name="literature_review.xlsx",
+            dialog_title="儲存文獻回顧表格",
+        )
+
+    def _on_review_save(self, e):
+        if not e.path or not self._review_rows:
+            return
+        self._set_busy("匯出 Excel...")
+        try:
+            self.analyzer.save_review_table_xlsx(self._review_rows, e.path)
+            self.status.value = f"已儲存：{e.path}"
+        except Exception as ex:
+            self.status.value = f"匯出失敗：{ex}"
+        finally:
+            self._set_idle()
+
+    # ════════════════════════════════════════════════════════════
+    # Tab 3: 論文比較分析
+    # ════════════════════════════════════════════════════════════
+
+    def _build_compare_tab(self) -> ft.Control:
+        # 論文選擇清單
+        all_papers = self.db.get_all(limit=1000)
+        self._all_papers = {p.id: p for p in all_papers}
+        self._compare_selected: dict[int, ft.Checkbox] = {}
+
+        paper_checkboxes = []
+        for p in all_papers[:200]:
+            cb = ft.Checkbox(
+                label=f"[{p.id}] {p.title[:55]}{'…' if len(p.title) > 55 else ''} ({p.year or '?'})",
+                value=False,
+            )
+            self._compare_selected[p.id] = cb
+            paper_checkboxes.append(cb)
+
+        self.compare_papers_list = ft.Column(
+            controls=paper_checkboxes,
+            scroll=ft.ScrollMode.AUTO,
+            height=200,
+            spacing=2,
+        )
+
+        # 自訂比較維度
+        self.compare_dims_input = ft.TextField(
+            label="自訂比較維度（逗號分隔，留空則 AI 自動決定）",
+            hint_text="例如：研究問題, 方法, 資料集, 主要貢獻, 局限性",
+            expand=True,
+        )
+
+        # 搜尋框篩選論文清單
+        self.compare_search = ft.TextField(
+            label="篩選論文（輸入關鍵字）",
+            expand=True,
+            on_change=self._on_compare_search,
+        )
+
+        self.compare_results = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=6, expand=True)
+        self._compare_data = None
+
+        self.compare_export_btn = ft.OutlinedButton(
+            "匯出比較表 Excel",
+            icon="download",
+            on_click=self._on_compare_export,
+            visible=False,
+        )
+        self.compare_file_picker = ft.FilePicker()
+
+        self.compare_file_picker.on_result = self._on_compare_save
+        self.page.overlay.append(self.compare_file_picker)
+
+        compare_btn = ft.ElevatedButton(
+            "開始比較",
+            icon="compare_arrows",
+            on_click=self._on_compare,
+            style=ft.ButtonStyle(bgcolor=ft.colors.PURPLE_700, color=ft.colors.WHITE),
+        )
+
+        return ft.Container(
+            content=ft.Column([
+                ft.Text("選擇 2-6 篇論文進行比較", size=13, weight=ft.FontWeight.BOLD),
+                self.compare_search,
+                ft.Container(
+                    content=self.compare_papers_list,
+                    border=ft.border.all(1, ft.colors.GREY_300),
+                    border_radius=6,
+                    padding=8,
+                ),
+                ft.Row([self.compare_dims_input, compare_btn, self.compare_export_btn], spacing=10),
+                ft.Divider(height=8),
+                ft.Container(content=self.compare_results, expand=True),
+            ], spacing=8, expand=True),
+            padding=ft.padding.only(top=16),
+            expand=True,
+        )
+
+    def _on_compare_search(self, e):
+        keyword = (e.control.value or "").lower()
+        for pid, cb in self._compare_selected.items():
+            paper = self._all_papers.get(pid)
+            if paper:
+                cb.visible = not keyword or keyword in paper.title.lower()
+        self.page.update()
+
+    def _on_compare(self, e):
+        selected = [self._all_papers[pid] for pid, cb in self._compare_selected.items() if cb.value]
+        if len(selected) < 2:
+            self.status.value = "請至少勾選 2 篇論文"
+            self.page.update()
+            return
+        if len(selected) > 6:
+            self.status.value = "最多選 6 篇論文（避免 prompt 過長）"
+            self.page.update()
+            return
+
+        dims_raw = self.compare_dims_input.value.strip()
+        dims = [d.strip() for d in dims_raw.split(",") if d.strip()] if dims_raw else None
+
+        self._set_busy(f"比較 {len(selected)} 篇論文中...")
+        self.compare_results.controls.clear()
+        self.compare_export_btn.visible = False
+        self.page.update()
+
+        try:
+            result = self.analyzer.compare_papers(papers=selected, dimensions=dims)
+            self._compare_data = (result, selected)
+            self._render_comparison(result)
+            self.compare_export_btn.visible = True
+            self.status.value = f"比較完成：{len(result['dimensions'])} 個維度"
+        except Exception as ex:
+            self.status.value = f"錯誤：{ex}"
+        finally:
+            self._set_idle()
+
+    def _render_comparison(self, result: dict):
+        dims = result.get("dimensions", [])
+        papers_meta = result.get("papers", [])
+        table_data = result.get("table", {})
+        synthesis = result.get("synthesis", "")
+
+        if not dims or not papers_meta:
+            return
+
+        # 比較表
+        headers = ["比較維度"] + [f"[{i+1}] {m['title'][:30]}…" for i, m in enumerate(papers_meta)]
+        col_defs = [ft.DataColumn(ft.Text(h, size=10, weight=ft.FontWeight.BOLD)) for h in headers]
+
+        rows = []
+        for dim in dims:
+            values = table_data.get(dim, [])
+            cells = [ft.DataCell(ft.Text(dim, size=10, weight=ft.FontWeight.W_500, color=ft.colors.PURPLE_800))]
+            for j in range(len(papers_meta)):
+                val = values[j] if j < len(values) else "-"
+                cells.append(ft.DataCell(
+                    ft.Container(
+                        content=ft.Text(str(val), size=10, tooltip=str(val)),
+                        width=130,
+                    )
+                ))
+            rows.append(ft.DataRow(cells=cells))
+
+        table = ft.DataTable(
+            columns=col_defs,
+            rows=rows,
+            border=ft.border.all(1, ft.colors.GREY_300),
+            border_radius=6,
+            heading_row_height=40,
+            data_row_min_height=40,
+            column_spacing=8,
+        )
+
+        # 論文標題索引
+        index_items = [
+            ft.Text(f"[{i+1}] {m['title']} ({m.get('year', '?')})" + (f" | {m['authors']}" if m.get('authors') and m['authors'] != '-' else ""),
+                    size=10, color=ft.colors.GREY_700)
+            for i, m in enumerate(papers_meta)
+        ]
+
+        # 綜合分析
+        synthesis_card = ft.Container(
+            content=ft.Column([
+                ft.Row([ft.Icon("analytics", size=15, color=ft.colors.PURPLE), ft.Text("綜合比較分析", size=12, weight=ft.FontWeight.BOLD)]),
+                ft.Text(synthesis, size=11, color=ft.colors.GREY_800, selectable=True),
+            ], spacing=6),
+            bgcolor=ft.colors.PURPLE_50,
+            padding=12,
+            border_radius=8,
+            margin=ft.margin.only(top=10),
+        ) if synthesis else ft.Container()
+
+        self.compare_results.controls.extend([
+            ft.Column(index_items, spacing=2),
+            ft.Container(height=6),
+            ft.Container(content=table, expand=True),
+            synthesis_card,
+        ])
+        self.page.update()
+
+    def _on_compare_export(self, e):
+        self.compare_file_picker.save_file(
+            allowed_extensions=["xlsx"],
+            file_name="paper_comparison.xlsx",
+            dialog_title="儲存比較分析",
+        )
+
+    def _on_compare_save(self, e):
+        if not e.path or not self._compare_data:
+            return
+        self._set_busy("匯出 Excel...")
+        result, papers = self._compare_data
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "論文比較"
+
+            dims = result["dimensions"]
+            papers_meta = result["papers"]
+            table = result["table"]
+
+            header_fill = PatternFill(start_color="6B3FA0", end_color="6B3FA0", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF")
+
+            headers = ["比較維度"] + [f"[{i+1}] {m['title'][:40]}" for i, m in enumerate(papers_meta)]
+            for ci, h in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=ci, value=h)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(wrap_text=True, vertical="center")
+
+            for ri, dim in enumerate(dims, 2):
+                ws.cell(row=ri, column=1, value=dim).font = Font(bold=True)
+                values = table.get(dim, [])
+                for ci, val in enumerate(values, 2):
+                    ws.cell(row=ri, column=ci, value=val).alignment = Alignment(wrap_text=True, vertical="top")
+
+            if result.get("synthesis"):
+                last = len(dims) + 3
+                ws.cell(row=last, column=1, value="綜合分析").font = Font(bold=True)
+                ws.merge_cells(start_row=last, start_column=2, end_row=last, end_column=len(headers))
+                ws.cell(row=last, column=2, value=result["synthesis"])
+
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = 30
+
+            wb.save(e.path)
+            self.status.value = f"已儲存：{e.path}"
+        except Exception as ex:
+            self.status.value = f"匯出失敗：{ex}"
+        finally:
+            self._set_idle()
+
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _set_busy(self, msg: str):
+        self.progress.visible = True
+        self.status.value = msg
+        self.page.update()
+
+    def _set_idle(self):
+        self.progress.visible = False
+        self.page.update()

@@ -1,0 +1,130 @@
+"""
+Arxiv API 模組
+補充 Crossref 查不到摘要的論文，作為第三個摘要來源
+"""
+
+import re
+import time
+import xml.etree.ElementTree as ET
+from typing import Optional
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
+_NS = {"atom": "http://www.w3.org/2005/Atom"}
+
+# 重試設定：最多 3 次，退避因子 2 → 等待 2s, 4s, 8s
+_RETRY = Retry(
+    total=3,
+    backoff_factor=2,
+    status_forcelist=[500, 502, 503, 504],
+    allowed_methods=["GET"],
+    raise_on_status=False,
+)
+
+
+class ArxivAPI:
+    """Arxiv Open Access API 查詢類"""
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "SmartPaper-Tagging/0.1 (Academic Research Tool)"
+        })
+        adapter = HTTPAdapter(max_retries=_RETRY)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+
+    def search_by_title(
+        self,
+        title: str,
+        timeout: int = 30,
+        max_attempts: int = 3,
+    ) -> Optional[dict]:
+        """
+        根據標題在 Arxiv 搜尋論文摘要，失敗時指數退避重試。
+
+        Args:
+            title: 論文標題
+            timeout: 單次請求 timeout（秒）
+            max_attempts: 最多嘗試幾次（含第一次）
+
+        Returns:
+            {"abstract": str, "arxiv_id": str, "year": str, "title": str} 或 None
+        """
+        clean_title = re.sub(r'[^\w\s]', ' ', title).strip()
+        params = {
+            "search_query": f'ti:"{clean_title}"',
+            "max_results": 5,
+            "sortBy": "relevance",
+        }
+
+        wait = 2  # 初始等待秒數
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.session.get(ARXIV_API_URL, params=params, timeout=timeout)
+                resp.raise_for_status()
+                return self._parse_best_match(resp.text, title)
+            except requests.Timeout:
+                if attempt < max_attempts:
+                    print(f"Arxiv 連線逾時，{wait}s 後重試（第 {attempt}/{max_attempts} 次）...")
+                    time.sleep(wait)
+                    wait *= 2
+                else:
+                    print(f"Arxiv API 請求失敗（已重試 {max_attempts} 次）：連線逾時")
+            except requests.RequestException as e:
+                if attempt < max_attempts:
+                    print(f"Arxiv 請求失敗，{wait}s 後重試（第 {attempt}/{max_attempts} 次）: {e}")
+                    time.sleep(wait)
+                    wait *= 2
+                else:
+                    print(f"Arxiv API 請求失敗（已重試 {max_attempts} 次）: {e}")
+            except ET.ParseError as e:
+                print(f"Arxiv XML 解析失敗: {e}")
+                return None  # XML 解析錯誤不值得重試
+
+        return None
+
+    def _parse_best_match(self, xml_text: str, original_title: str) -> Optional[dict]:
+        """從 Atom XML 結果中找出最佳匹配的論文"""
+        root = ET.fromstring(xml_text)
+        entries = root.findall("atom:entry", _NS)
+        if not entries:
+            return None
+
+        orig_words = set(original_title.lower().split())
+        best = None
+        best_overlap = 0
+
+        for entry in entries:
+            title_el = entry.find("atom:title", _NS)
+            summary_el = entry.find("atom:summary", _NS)
+            if title_el is None or summary_el is None:
+                continue
+
+            entry_title = (title_el.text or "").strip()
+            abstract = (summary_el.text or "").strip()
+            if not abstract:
+                continue
+
+            entry_words = set(entry_title.lower().split())
+            overlap = len(orig_words & entry_words)
+
+            if overlap > best_overlap:
+                best_overlap = overlap
+                id_el = entry.find("atom:id", _NS)
+                pub_el = entry.find("atom:published", _NS)
+                best = {
+                    "title": entry_title,
+                    "abstract": abstract,
+                    "arxiv_id": (id_el.text or "").strip() if id_el is not None else None,
+                    "year": (pub_el.text or "")[:4] if pub_el is not None else None,
+                }
+
+        # 至少需要 3 個單字重疊，避免錯誤匹配
+        if best and best_overlap >= 3:
+            return best
+        return None
