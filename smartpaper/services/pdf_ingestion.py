@@ -121,6 +121,9 @@ class PDFIngestionService:
         self.chunk_store.insert_chunks(paper_id, chunk_dicts)
         result.total_chunks = n
 
+        # 儲存 PDF 原始路徑，方便之後直接開啟檔案
+        self.sqlite_db.set_pdf_path(paper_id, str(Path(pdf_path).resolve()))
+
         # 批次向量化並存入 ChromaDB
         _prog(f"向量化 {n} 個 chunk...")
         self._embed_chunks(paper_id, parse_result.chunks)

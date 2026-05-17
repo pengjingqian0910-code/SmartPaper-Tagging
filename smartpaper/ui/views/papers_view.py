@@ -2,6 +2,9 @@
 論文管理視圖 — 重新設計版
 """
 
+import os
+import platform
+import subprocess
 import flet as ft
 from typing import Optional, List
 
@@ -151,7 +154,7 @@ class _Card:
             border_radius=6,
             border=ft.border.all(1, "#A7F3D0"),
             bgcolor="#ECFDF5",
-            tooltip="閱覽 PDF 全文章節",
+            tooltip="用系統預設程式開啟 PDF",
             visible=self._has_fulltext,
         )
 
@@ -715,82 +718,29 @@ class PapersView:
         self.page.update()
 
     def _on_read_fulltext(self, paper: Paper):
-        """開啟全文閱覽對話框，按章節顯示所有 chunks"""
-        chunks = self._chunk_store.get_by_paper(paper.id)
-        if not chunks:
-            self._snack("找不到全文內容", error=True)
+        """用系統預設程式開啟論文的原始 PDF 檔案"""
+        pdf_path = self.pipeline.sqlite_db.get_pdf_path(paper.id)
+
+        if not pdf_path:
+            self._snack("此論文尚未記錄 PDF 路徑（舊版匯入），請重新上傳 PDF", error=True)
             return
 
-        # 按章節分組
-        sections: dict[str, list] = {}
-        for c in chunks:
-            sec = c.section or "全文"
-            sections.setdefault(sec, []).append(c)
+        from pathlib import Path
+        path = Path(pdf_path)
+        if not path.exists():
+            self._snack(f"找不到檔案：{pdf_path}", error=True)
+            return
 
-        content_controls = []
-        for sec, cs in sections.items():
-            content_controls.append(
-                ft.Container(
-                    content=ft.Text(sec, size=12, weight=ft.FontWeight.W_600,
-                                    color=ACCENT),
-                    bgcolor="#EEF2FF",
-                    border_radius=6,
-                    padding=ft.padding.symmetric(horizontal=10, vertical=4),
-                )
-            )
-            for c in cs:
-                page_label = f"  第 {c.page_num} 頁" if c.page_num else ""
-                content_controls.append(
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Text(
-                                f"p.{c.page_num}" if c.page_num else "",
-                                size=10, color=META_C,
-                            ),
-                            ft.Text(
-                                c.chunk_text,
-                                size=12, color=TITLE_C,
-                                selectable=True,
-                            ),
-                        ], spacing=4),
-                        bgcolor="#FAFAFA",
-                        border=ft.border.all(1, BORDER),
-                        border_radius=8,
-                        padding=12,
-                    )
-                )
-
-        dlg = ft.AlertDialog(
-            modal=True,
-            title=ft.Row([
-                ft.Icon("menu_book", color=ACCENT, size=18),
-                ft.Text(
-                    paper.title[:60] + ("…" if len(paper.title) > 60 else ""),
-                    size=14, weight=ft.FontWeight.W_600,
-                ),
-            ], spacing=8),
-            content=ft.Container(
-                content=ft.Column(
-                    content_controls,
-                    spacing=8,
-                    scroll=ft.ScrollMode.AUTO,
-                ),
-                width=760,
-                height=560,
-            ),
-            actions=[
-                ft.Text(
-                    f"{len(chunks)} 個段落 · {len(sections)} 個章節",
-                    size=11, color=META_C,
-                ),
-                ft.Container(expand=True),
-                ft.TextButton("關閉", on_click=lambda e: self._close_dlg(dlg)),
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-        self.page.dialog = dlg
-        dlg.open = True
-        self.page.update()
+        try:
+            sys = platform.system()
+            if sys == "Windows":
+                os.startfile(str(path))
+            elif sys == "Darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception as ex:
+            self._snack(f"無法開啟 PDF：{ex}", error=True)
 
     def _snack(self, msg: str, error: bool = False):
         self.page.snack_bar = ft.SnackBar(

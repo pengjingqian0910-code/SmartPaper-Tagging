@@ -82,6 +82,7 @@ class SQLiteDB:
                 "ALTER TABLE papers ADD COLUMN venue TEXT",
                 "ALTER TABLE papers ADD COLUMN year INTEGER",
                 "ALTER TABLE papers ADD COLUMN citation_count INTEGER",
+                "ALTER TABLE papers ADD COLUMN pdf_path TEXT",
             ]:
                 try:
                     conn.execute(col_def)
@@ -622,3 +623,20 @@ class SQLiteDB:
                     return True
 
         return False
+
+    def set_pdf_path(self, paper_id: int, pdf_path: str) -> None:
+        """儲存論文的原始 PDF 檔案路徑"""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE papers SET pdf_path = ? WHERE id = ?",
+                (str(pdf_path), paper_id),
+            )
+            conn.commit()
+
+    def get_pdf_path(self, paper_id: int) -> Optional[str]:
+        """取得論文的原始 PDF 檔案路徑，若無則回傳 None"""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT pdf_path FROM papers WHERE id = ?", (paper_id,)
+            ).fetchone()
+        return row["pdf_path"] if row and row["pdf_path"] else None
