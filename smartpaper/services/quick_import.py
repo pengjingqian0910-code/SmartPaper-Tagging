@@ -158,6 +158,95 @@ class QuickImportService:
         paper = self._enrich_tags(paper, prog)
         return self._save_paper(paper, prog)
 
+    def import_with_meta(
+        self,
+        meta: dict,
+        progress_callback=None,
+    ) -> tuple[Optional[Paper], str]:
+        """
+        用頁面抓到的 metadata 直接建立論文（Bookmarklet 專用）。
+        meta 鍵：title, abstract, doi, authors, year, venue
+        若 abstract 空白且有 DOI，嘗試 Crossref 補充。
+        """
+        def prog(msg):
+            if progress_callback:
+                progress_callback(msg)
+
+        title    = (meta.get("title")    or "").strip()
+        abstract = (meta.get("abstract") or "").strip()
+        doi      = (meta.get("doi")      or "").strip()
+        arxiv_id = (meta.get("arxiv")    or "").strip()
+        authors  = meta.get("authors")   or []
+        year     = meta.get("year")
+        venue    = (meta.get("venue")    or "").strip()
+
+        if not title:
+            return None, "頁面未提供標題，無法匯入"
+
+        # 重複檢查
+        if self.sqlite_db.exists(doi=doi or None, title=title):
+            return None, f"論文已存在：{title[:60]}"
+
+        # 沒有 abstract 時，嘗試 Crossref 補充
+        if not abstract and doi:
+            prog("從 Crossref 補充摘要...")
+            cr = self._crossref.get_by_doi(doi)
+            if cr:
+                abstract = cr.abstract or ""
+                authors  = authors or cr.authors
+                venue    = venue or cr.journal or ""
+                if not year:
+                    year = _parse_year(cr.published_date)
+
+        # 沒有 abstract 時，嘗試 arXiv API 補充
+        if not abstract and arxiv_id:
+            prog(f"從 arXiv 補充摘要: {arxiv_id}...")
+            try:
+                import requests as _req
+                import xml.etree.ElementTree as _ET
+                resp = _req.get(
+                    f"https://export.arxiv.org/api/query?id_list={arxiv_id}",
+                    timeout=15,
+                )
+                ns = {"atom": "http://www.w3.org/2005/Atom",
+                      "arxiv": "http://arxiv.org/schemas/atom"}
+                root = _ET.fromstring(resp.text)
+                entry = root.find("atom:entry", ns)
+                if entry is not None:
+                    def _t(tag):
+                        el = entry.find(tag, ns)
+                        return el.text.strip() if el is not None and el.text else ""
+                    abstract = abstract or _t("atom:summary")
+                    if not authors:
+                        authors = [
+                            a.find("atom:name", ns).text.strip()
+                            for a in entry.findall("atom:author", ns)
+                            if a.find("atom:name", ns) is not None
+                        ]
+                    if not year:
+                        year = _parse_year(_t("atom:published"))
+                    if not doi:
+                        doi = _t("arxiv:doi") or f"10.48550/arXiv.{arxiv_id}"
+                    venue = venue or _t("arxiv:journal_ref") or "arXiv"
+            except Exception:
+                pass
+
+        if isinstance(year, str):
+            year = _parse_year(year)
+
+        paper = Paper(
+            title=title,
+            abstract=abstract,
+            doi=doi or None,
+            authors=authors if isinstance(authors, list) else [authors],
+            venue=venue or None,
+            year=year,
+            source="bookmarklet",
+            tags=[],
+        )
+        paper = self._enrich_tags(paper, prog)
+        return self._save_paper(paper, prog)
+
     # ── 私有方法 ──────────────────────────────────────────────────────
 
     def _enrich_tags(self, paper: Paper, prog) -> Paper:

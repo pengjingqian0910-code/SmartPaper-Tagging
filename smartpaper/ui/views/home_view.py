@@ -775,21 +775,46 @@ class HomeView:
 
     _BOOKMARKLET = (
         "javascript:(function(){"
-        "var d=null,ax=null,ms=document.querySelectorAll('meta');"
-        "for(var m of ms){"
-        "var n=(m.getAttribute('name')||m.getAttribute('property')||'').toLowerCase(),"
-        "c=m.getAttribute('content')||'';"
-        "if((n.includes('doi')||n==='dc.identifier')&&/^10\\./.test(c)){d=c;break;}}"
-        "if(!d){var u=location.href.match(/doi\\.org\\/(10\\.[^&\\s#?]+)/);if(u)d=u[1];}"
-        "if(!d){var a=document.querySelector('a[href*=\"doi.org/10.\"]');"
-        "if(a){var am=a.href.match(/doi\\.org\\/(10\\.[^&\\s#?]+)/);if(am)d=am[1];}}"
-        "var ax2=location.href.match(/arxiv\\.org\\/(?:abs|pdf)\\/(\\d{4}\\.\\d{4,5})/);if(ax2)ax=ax2[1];"
-        "if(!d&&!ax){alert('SmartPaper: 找不到 DOI 或 arXiv ID，請在論文頁面使用');return;}"
-        "var p=d?'doi='+encodeURIComponent(d):'arxiv='+encodeURIComponent(ax);"
-        "fetch('http://localhost:7878/import?'+p)"
+        # ── helper: get first meta content matching any of the given names ──
+        "function M(ns){"
+        "for(var i=0;i<ns.length;i++){"
+        "var el=document.querySelector('meta[name=\"'+ns[i]+'\"],meta[property=\"'+ns[i]+'\"]');"
+        "if(el&&el.content)return el.content.trim();}"
+        "return '';}"
+        # ── extract all citation_author tags (may be multiple) ──
+        "var auEls=document.querySelectorAll('meta[name=\"citation_author\"],meta[property=\"citation_author\"]');"
+        "var authors=[];"
+        "for(var i=0;i<auEls.length;i++){if(auEls[i].content)authors.push(auEls[i].content.trim());}"
+        # ── extract other fields ──
+        "var title=M(['citation_title','dc.title','og:title','twitter:title']);"
+        "var abstract=M(['citation_abstract','dc.description','description']);"
+        "var venue=M(['citation_journal_title','citation_conference_title','dc.source']);"
+        "var yrRaw=M(['citation_publication_date','citation_year','dc.date']);"
+        "var year=null;if(yrRaw){var ym=yrRaw.match(/\\d{4}/);if(ym)year=parseInt(ym[0]);}"
+        # ── extract DOI ──
+        "var doi=M(['citation_doi','dc.identifier','prism.doi']);"
+        "if(!doi){var du=location.href.match(/doi\\.org\\/(10\\.[^&\\s#?]+)/);if(du)doi=du[1];}"
+        "if(!doi){var da=document.querySelector('a[href*=\"doi.org/10.\"]');"
+        "if(da){var dam=da.href.match(/doi\\.org\\/(10\\.[^&\\s#?]+)/);if(dam)doi=dam[1];}}"
+        # strip doi.org prefix if present
+        "if(doi)doi=doi.replace(/^https?:\\/\\/doi\\.org\\//,'');"
+        # ── extract arXiv ID ──
+        "var arxiv=null;"
+        "var axm=location.href.match(/arxiv\\.org\\/(?:abs|pdf)\\/(\\d{4}\\.\\d{4,5})/);if(axm)arxiv=axm[1];"
+        "if(!arxiv){var axm2=M(['citation_arxiv_id']);if(axm2)arxiv=axm2.replace(/^arxiv:/i,'');}"
+        # ── fallback title from page title ──
+        "if(!title)title=document.title||'';"
+        # ── must have at least a title or doi/arxiv ──
+        "if(!title&&!doi&&!arxiv){alert('SmartPaper: 找不到論文資訊，請在論文頁面使用');return;}"
+        # ── POST JSON to local API ──
+        "fetch('http://localhost:7878/import',{"
+        "method:'POST',"
+        "headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({title:title,abstract:abstract,doi:doi,authors:authors,year:year,venue:venue,arxiv:arxiv})"
+        "})"
         ".then(function(r){return r.json();})"
         ".then(function(j){"
-        "if(j.success)alert('✅ SmartPaper：已加入「'+j.title+'」');"
+        "if(j.success)alert('✅ SmartPaper：已加入「'+j.title+'」\\n標籤：'+(j.tags||[]).join(', '));"
         "else alert('❌ SmartPaper：'+j.error);})"
         ".catch(function(){alert('❌ 無法連接 SmartPaper，請確認應用程式已開啟');});"
         "})()"

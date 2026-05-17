@@ -28,35 +28,55 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     # ── 主要端點 ────────────────────────────────────────────────────
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        params = urllib.parse.parse_qs(parsed.query)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self._cors()
+        self.end_headers()
+        if parsed.path == "/status":
+            self._write({"status": "running", "port": PORT})
+        else:
+            self._write({"error": "use POST /import"})
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length else b"{}"
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self._cors()
         self.end_headers()
 
-        if parsed.path == "/status":
-            self._write({"status": "running", "port": PORT})
+        if parsed.path != "/import":
+            self._write({"error": "not found"})
             return
 
-        if parsed.path == "/import":
-            doi   = (params.get("doi",   [None])[0] or "").strip()
-            arxiv = (params.get("arxiv", [None])[0] or "").strip()
-            text  = doi or arxiv
-            if not text:
-                self._write({"success": False, "error": "缺少 doi 或 arxiv 參數"})
-                return
-            self._do_import(text)
-        else:
-            self._write({"error": "not found"})
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except Exception:
+            self._write({"success": False, "error": "JSON 解析失敗"})
+            return
+
+        self._do_import(data)
 
     # ── 匯入邏輯 ────────────────────────────────────────────────────
-    def _do_import(self, text: str):
+    def _do_import(self, data: dict):
         try:
             if _Handler._importer is None:
                 from .quick_import import QuickImportService
                 _Handler._importer = QuickImportService()
-            paper, err = _Handler._importer.import_from_text(text)
+
+            # 有完整 meta（來自 bookmarklet）→ 用 import_with_meta
+            if data.get("title"):
+                paper, err = _Handler._importer.import_with_meta(data)
+            else:
+                # 只有 DOI 或 arXiv（舊路徑 fallback）
+                text = data.get("doi") or data.get("arxiv") or ""
+                if not text:
+                    self._write({"success": False, "error": "缺少 doi、arxiv 或 title"})
+                    return
+                paper, err = _Handler._importer.import_from_text(text)
+
             if err:
                 self._write({"success": False, "error": err})
             else:
