@@ -9,6 +9,7 @@ import threading
 
 from ...services.pipeline import Pipeline
 from ...services.search import SearchService
+from ...database.chunk_store import ChunkStore
 from ...models import Paper
 
 # ── 色彩 ──────────────────────────────────────────────────────────────
@@ -63,11 +64,14 @@ def _tag_chip(text: str, on_remove=None) -> ft.Container:
 
 
 class _Card:
-    def __init__(self, paper: Paper, on_delete, on_tag_remove, page: ft.Page):
+    def __init__(self, paper: Paper, on_delete, on_tag_remove, page: ft.Page,
+                 has_fulltext: bool = False, on_read_fulltext=None):
         self.paper = paper
         self._page = page
         self._on_delete = on_delete
         self._on_tag_remove = on_tag_remove
+        self._has_fulltext = has_fulltext
+        self._on_read_fulltext = on_read_fulltext
         self._expanded = False
         self._tag_row: Optional[ft.Row] = None
         self._detail_col: Optional[ft.Column] = None
@@ -136,6 +140,21 @@ class _Card:
             tooltip="刪除此論文",
         )
 
+        # 閱覽全文按鈕（有 PDF 才顯示）
+        read_btn = ft.Container(
+            content=ft.Row([
+                ft.Icon("menu_book", size=13, color="#065F46"),
+                ft.Text("閱覽全文", size=11, color="#065F46"),
+            ], spacing=4, tight=True),
+            on_click=lambda e, pp=p: self._on_read_fulltext(pp) if self._on_read_fulltext else None,
+            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+            border_radius=6,
+            border=ft.border.all(1, "#A7F3D0"),
+            bgcolor="#ECFDF5",
+            tooltip="閱覽 PDF 全文章節",
+            visible=self._has_fulltext,
+        )
+
         card_inner = ft.Column([
             # 標題列
             ft.Row([
@@ -148,6 +167,7 @@ class _Card:
                     max_lines=2,
                     overflow=ft.TextOverflow.ELLIPSIS,
                 ),
+                read_btn,
                 del_btn,
             ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
 
@@ -205,7 +225,9 @@ class PapersView:
         self.page = page
         self.pipeline = Pipeline()
         self.search_service = SearchService()
+        self._chunk_store = ChunkStore()
         self.papers: List[Paper] = []
+        self._fulltext_ids: set[int] = set()
         self.current_page = 0
         self.page_size = 25
         self.selected_tag: Optional[str] = None
@@ -358,6 +380,7 @@ class PapersView:
     # ── Data ──────────────────────────────────────────────────────────
 
     def _load_papers(self, tag=None, query=""):
+        self._fulltext_ids = set(self._chunk_store.papers_with_fulltext())
         if tag and tag not in ("__all__",):
             papers = list(self.search_service.search_by_tag(tag))
         else:
@@ -394,7 +417,11 @@ class PapersView:
         self._pagination_text.value = f"第 {self.current_page + 1} / {total_pages} 頁"
 
         self._list_col.controls = [
-            _Card(p, self._on_delete, self._on_tag_remove, self.page).build()
+            _Card(
+                p, self._on_delete, self._on_tag_remove, self.page,
+                has_fulltext=(p.id in self._fulltext_ids),
+                on_read_fulltext=self._on_read_fulltext,
+            ).build()
             for p in page_papers
         ]
 
@@ -685,6 +712,84 @@ class PapersView:
         # 關閉後重新整理論文列表（標籤可能已改變）
         self._load_papers(self.selected_tag, self._search_q)
         self._refresh_list()
+        self.page.update()
+
+    def _on_read_fulltext(self, paper: Paper):
+        """開啟全文閱覽對話框，按章節顯示所有 chunks"""
+        chunks = self._chunk_store.get_by_paper(paper.id)
+        if not chunks:
+            self._snack("找不到全文內容", error=True)
+            return
+
+        # 按章節分組
+        sections: dict[str, list] = {}
+        for c in chunks:
+            sec = c.section or "全文"
+            sections.setdefault(sec, []).append(c)
+
+        content_controls = []
+        for sec, cs in sections.items():
+            content_controls.append(
+                ft.Container(
+                    content=ft.Text(sec, size=12, weight=ft.FontWeight.W_600,
+                                    color=ACCENT),
+                    bgcolor="#EEF2FF",
+                    border_radius=6,
+                    padding=ft.padding.symmetric(horizontal=10, vertical=4),
+                )
+            )
+            for c in cs:
+                page_label = f"  第 {c.page_num} 頁" if c.page_num else ""
+                content_controls.append(
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text(
+                                f"p.{c.page_num}" if c.page_num else "",
+                                size=10, color=META_C,
+                            ),
+                            ft.Text(
+                                c.chunk_text,
+                                size=12, color=TITLE_C,
+                                selectable=True,
+                            ),
+                        ], spacing=4),
+                        bgcolor="#FAFAFA",
+                        border=ft.border.all(1, BORDER),
+                        border_radius=8,
+                        padding=12,
+                    )
+                )
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon("menu_book", color=ACCENT, size=18),
+                ft.Text(
+                    paper.title[:60] + ("…" if len(paper.title) > 60 else ""),
+                    size=14, weight=ft.FontWeight.W_600,
+                ),
+            ], spacing=8),
+            content=ft.Container(
+                content=ft.Column(
+                    content_controls,
+                    spacing=8,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=760,
+                height=560,
+            ),
+            actions=[
+                ft.Text(
+                    f"{len(chunks)} 個段落 · {len(sections)} 個章節",
+                    size=11, color=META_C,
+                ),
+                ft.Container(expand=True),
+                ft.TextButton("關閉", on_click=lambda e: self._close_dlg(dlg)),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dlg
+        dlg.open = True
         self.page.update()
 
     def _snack(self, msg: str, error: bool = False):

@@ -834,11 +834,10 @@ class QAView:
                 self._compare_q,
                 ft.Container(
                     content=self._compare_col,
-                    height=160,
+                    height=220,
                     border=ft.border.all(1, "#B3E5FC"),
                     border_radius=6,
                     padding=8,
-                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
                 ),
                 self._compare_status,
             ], spacing=6),
