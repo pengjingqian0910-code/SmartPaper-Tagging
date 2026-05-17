@@ -268,7 +268,7 @@ class QuickImportService:
         if paper.abstract:
             prog("向量化摘要...")
             try:
-                self.vector_db.add_paper(paper_id, paper.abstract, {
+                self.vector_db.add(paper_id, paper.abstract, {
                     "title": paper.title,
                     "tags": ",".join(paper.tags),
                 })
