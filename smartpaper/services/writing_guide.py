@@ -5,7 +5,7 @@
 
 import json
 from dataclasses import dataclass, field
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Optional, Callable
 from google import genai
 
 from ..database.sqlite_db import SQLiteDB
@@ -14,8 +14,16 @@ from ..config import GEMINI_API_KEY, GEMINI_MODEL
 from ..models import Paper
 from .reranker import Reranker
 
-if TYPE_CHECKING:
-    from ..skills import SkillConfig
+# 學術寫作專家系統提示，讓所有分析更聚焦於學術寫作品質
+_WRITING_EXPERT_PROMPT = (
+    "你是一位資深學術寫作顧問，擁有豐富的期刊論文、會議論文審稿與指導經驗。\n"
+    "你的任務是協助研究者以嚴謹、清晰、具說服力的學術語言呈現研究成果。\n"
+    "在分析引用建議時，你特別注重：\n"
+    "1. 引用的邏輯鏈（如何從文獻建立論述的學術依據）\n"
+    "2. 段落層次感（開頭引入背景、中間支撐論點、結尾總結或過渡）\n"
+    "3. 學術措辭的精確性（避免過度籠統的引用理由）\n"
+    "4. 論文整體架構的連貫性與完整性\n"
+)
 
 # forward-ref workaround: OutlineEnrichment is defined after WritingGuideService uses it
 # so we use string annotation in generate_enrichment return type
@@ -61,11 +69,9 @@ class WritingGuideService:
         sqlite_db: Optional[SQLiteDB] = None,
         vector_db: Optional[VectorDB] = None,
         api_key: Optional[str] = None,
-        skill: Optional["SkillConfig"] = None,
     ):
         self.sqlite_db = sqlite_db or SQLiteDB()
         self.vector_db = vector_db or VectorDB()
-        self.skill = skill
         self.reranker = Reranker()
 
         self.api_key = api_key or GEMINI_API_KEY
@@ -191,7 +197,7 @@ class WritingGuideService:
     ) -> SectionGuide:
         """用 LLM 分析候選論文並生成引用建議（一次 API call 處理所有候選）"""
 
-        role_prefix = self.skill.system_prompt + "\n\n" if self.skill else ""
+        role_prefix = _WRITING_EXPERT_PROMPT + "\n"
 
         # 建構論文列表文字
         papers_text = ""
@@ -329,7 +335,8 @@ class WritingGuideService:
         prog("Step 3-1：AI 分析大綱缺口與追問...")
 
         # ── Call 1：找出 follow-up questions + missing concepts ──────
-        prompt1 = f"""你是一位嚴格的學術寫作顧問，負責檢視論文大綱是否完整、有深度。
+        prompt1 = f"""{_WRITING_EXPERT_PROMPT}
+請以嚴格的學術寫作顧問角色，檢視論文大綱是否完整、有深度。
 
 作者的論文大綱：
 {outline_text}

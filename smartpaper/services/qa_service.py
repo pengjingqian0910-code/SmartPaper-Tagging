@@ -317,3 +317,23 @@ class QAService:
             return response.text.strip()
         except Exception as e:
             return f"⚠️ LLM 呼叫失敗：{e}"
+
+    def suggest_followups(self, question: str, answer: str, n: int = 2) -> list[str]:
+        """根據問題和回答，產生 n 個引導式追問建議"""
+        prompt = (
+            f"用戶剛問了：「{question}」\n"
+            f"AI 回答了：「{answer[:400]}」\n\n"
+            f"請根據以上問答內容，提出 {n} 個值得繼續深入的追問，"
+            "幫助用戶更深入理解這些論文。\n"
+            "要求：每個問題獨立一行，不要加編號或符號，直接是問句，20字以內。\n"
+            f"只輸出 {n} 行問句，不要其他文字。"
+        )
+        try:
+            response = self._gemini.client.models.generate_content(
+                model=self._gemini.model_name,
+                contents=prompt,
+            )
+            lines = [l.strip() for l in response.text.strip().splitlines() if l.strip()]
+            return lines[:n]
+        except Exception:
+            return []

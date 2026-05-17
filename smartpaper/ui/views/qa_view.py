@@ -734,6 +734,15 @@ class QAView:
             self._set_loading(False)
             self._chat_column.update()
 
+            # 背景生成追問建議（不阻塞主回答顯示）
+            try:
+                suggestions = service.suggest_followups(question, result.answer)
+                if suggestions:
+                    self._append_followup_chips(suggestions)
+                    self._chat_column.update()
+            except Exception:
+                pass
+
         threading.Thread(target=run, daemon=True).start()
 
     # ── UI 元件工廠 ───────────────────────────────────────────────────────
@@ -878,6 +887,40 @@ class QAView:
             ft.Text("摘要", size=10, color=ft.colors.GREY_600),
         ], spacing=4))
         return controls
+
+    def _append_followup_chips(self, suggestions: list[str]):
+        """在聊天區末尾加上引導式追問按鈕"""
+        chips = []
+        for q in suggestions:
+            chips.append(ft.OutlinedButton(
+                text=q,
+                icon="chat_bubble_outline",
+                on_click=lambda e, text=q: self._fill_input(text),
+                style=ft.ButtonStyle(
+                    color="#1D4ED8",
+                    side=ft.BorderSide(1, "#BFDBFE"),
+                    shape=ft.RoundedRectangleBorder(radius=20),
+                    padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                ),
+            ))
+        self._chat_column.controls.append(
+            ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon("lightbulb_outline", size=12, color="#6366F1"),
+                        ft.Text("可以繼續問：", size=11, color="#6366F1",
+                                italic=True),
+                    ], spacing=4),
+                    ft.Row(chips, spacing=8, wrap=True),
+                ], spacing=6),
+                padding=ft.padding.only(left=12, top=6, bottom=2),
+            )
+        )
+
+    def _fill_input(self, text: str):
+        self._input.value = text
+        self._input.update()
+        self._input.focus()
 
     def _loading_bubble(self) -> ft.Control:
         return ft.Container(

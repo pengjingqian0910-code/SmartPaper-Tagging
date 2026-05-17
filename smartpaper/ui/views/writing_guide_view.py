@@ -12,7 +12,6 @@ from typing import Optional
 from ...services.writing_guide import (
     WritingGuideService, SectionGuide, OutlineEnrichment,
 )
-from ...skills import ALL_SKILLS, get_skill
 from ...config import GEMINI_API_KEY
 
 # ── 色彩常數 ──────────────────────────────────────────────────────────────
@@ -53,11 +52,6 @@ class WritingGuideView:
             multiline=True, min_lines=5, max_lines=12, expand=True,
         )
 
-        self.skill_dropdown = ft.Dropdown(
-            label="專家角色", value="general",
-            options=[ft.dropdown.Option(sid, s.name) for sid, s in ALL_SKILLS.items()],
-            width=190,
-        )
         self.n_candidates_dropdown = ft.Dropdown(
             label="候選論文數", value="8",
             options=[
@@ -115,7 +109,6 @@ class WritingGuideView:
             ft.Divider(height=1, color=_C_BORDER),
             self.outline_input,
             ft.Row([
-                self.skill_dropdown,
                 self.n_candidates_dropdown,
                 self.find_btn,
                 self.analyze_btn,
@@ -174,9 +167,8 @@ class WritingGuideView:
 
         def _run():
             try:
-                skill = get_skill(self.skill_dropdown.value or "general")
-                n    = int(self.n_candidates_dropdown.value or "8")
-                self.service = WritingGuideService(skill=skill)
+                n = int(self.n_candidates_dropdown.value or "8")
+                self.service = WritingGuideService()
 
                 for idx, section in enumerate(sections, 1):
                     self.status_text.value = (
