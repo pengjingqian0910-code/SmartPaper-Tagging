@@ -1,6 +1,6 @@
 """
 問論文（Ask Your Papers）視圖
-左欄：來源選擇 / 跨論文比較 / PDF 管理
+左欄：來源選擇 / PDF 管理
 右欄：聊天區 + 輸入列
 """
 
@@ -11,7 +11,6 @@ from typing import Optional
 from ...services.qa_service import QAService, ChatMessage, QAResult, SourceChunk
 from ...services.pdf_ingestion import PDFIngestionService
 from ...services.pdf_import_service import PDFImportService, ExtractedMeta
-from ...services.paper_compare import PaperCompareService
 from ...database.sqlite_db import SQLiteDB
 from ...config import GEMINI_API_KEY
 
@@ -93,7 +92,7 @@ def _sidebar_card(title: str, icon: str, icon_color: str,
 
 
 class QAView:
-    """問論文聊天介面（含 PDF 管理 / 跨論文比較）"""
+    """問論文聊天介面（含 PDF 管理）"""
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -115,11 +114,6 @@ class QAView:
         self._queue_col: Optional[ft.Column] = None
         self._importer: Optional[PDFImportService] = None
         self._last_result: Optional[QAResult] = None
-        self._comparer: Optional[PaperCompareService] = None
-        self._compare_checkboxes: dict[int, ft.Checkbox] = {}
-        self._compare_col: Optional[ft.Column] = None
-        self._compare_status: Optional[ft.Text] = None
-        self._compare_q: Optional[ft.TextField] = None
         # PDF 管理面板 折疊狀態
         self._pdf_mgmt_visible = False
         self._pdf_mgmt_content: Optional[ft.Column] = None
@@ -147,11 +141,6 @@ class QAView:
         if not self._importer:
             self._importer = PDFImportService()
         return self._importer
-
-    def _get_comparer(self) -> PaperCompareService:
-        if not self._comparer:
-            self._comparer = PaperCompareService()
-        return self._comparer
 
     # ── 主要建構 ──────────────────────────────────────────────────────────
 
@@ -194,7 +183,6 @@ class QAView:
         left_col = ft.Container(
             content=ft.Column([
                 self._build_source_panel(),
-                self._build_compare_panel(),
                 self._build_pdf_panel(),
             ], spacing=10, scroll=ft.ScrollMode.AUTO),
             width=_SIDEBAR_W,
@@ -345,161 +333,7 @@ class QAView:
         self._on_source_changed()
         self.page.update()
 
-    # ── 側邊欄 Section 2：跨論文比較 ────────────────────────────────────
-
-    def _build_compare_panel(self) -> ft.Control:
-        self._compare_status = ft.Text("", size=11)
-        self._compare_q = ft.TextField(
-            hint_text="比較問題（選填）",
-            multiline=False, height=38,
-            border_radius=8,
-            content_padding=ft.padding.symmetric(horizontal=10, vertical=0),
-        )
-        self._compare_col = ft.Column(spacing=3, scroll=ft.ScrollMode.AUTO)
-        self._rebuild_compare_list()
-
-        compare_btn = ft.ElevatedButton(
-            "分析比較", icon="compare_arrows", height=34,
-            style=ft.ButtonStyle(bgcolor="#0277BD", color=ft.colors.WHITE),
-            on_click=self._on_compare,
-        )
-
-        content = ft.Column([
-            ft.Text("勾選 2–6 篇，AI 比較方法異同、數據差異、研究缺口",
-                    size=10, color=ft.colors.GREY_600),
-            ft.Row([
-                ft.TextButton("全選",
-                    on_click=lambda e: self._toggle_all_compare(True)),
-                ft.TextButton("全不選",
-                    on_click=lambda e: self._toggle_all_compare(False)),
-            ], spacing=4),
-            ft.Container(
-                content=self._compare_col,
-                height=200,
-                border=ft.border.all(1, "#B3E5FC"),
-                border_radius=6,
-                padding=6,
-                clip_behavior=ft.ClipBehavior.HARD_EDGE,
-            ),
-            self._compare_q,
-            ft.Row([compare_btn, self._compare_status], spacing=8,
-                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        ], spacing=6)
-
-        return _sidebar_card(
-            "跨論文比較分析", "compare_arrows", "#0277BD",
-            content, bgcolor="#E1F5FE", border_color="#81D4FA",
-        )
-
-    def _rebuild_compare_list(self):
-        if self._compare_col is None:
-            return
-        self._compare_col.controls.clear()
-        self._compare_checkboxes.clear()
-        for p in self._sqlite.get_all(limit=500):
-            cb = ft.Checkbox(value=False, scale=0.82)
-            self._compare_checkboxes[p.id] = cb
-            title = p.title[:45] + "…" if len(p.title) > 45 else p.title
-            year  = f" ({p.year})" if p.year else ""
-            self._compare_col.controls.append(
-                ft.Row([
-                    cb,
-                    ft.Text(title + year, size=10, expand=True,
-                            overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-                ], spacing=4)
-            )
-
-    def _toggle_all_compare(self, value: bool):
-        for cb in self._compare_checkboxes.values():
-            cb.value = value
-        self.page.update()
-
-    def _on_compare(self, e):
-        selected_ids = [pid for pid, cb in self._compare_checkboxes.items() if cb.value]
-        if len(selected_ids) < 2:
-            self._compare_status.value = "⚠️ 請至少選 2 篇"
-            self._compare_status.color = ft.colors.ORANGE_700
-            self.page.update()
-            return
-        if len(selected_ids) > 6:
-            self._compare_status.value = "⚠️ 最多 6 篇"
-            self._compare_status.color = ft.colors.ORANGE_700
-            self.page.update()
-            return
-
-        question = (self._compare_q.value or "").strip()
-        self._compare_status.value = f"⏳ 分析 {len(selected_ids)} 篇..."
-        self._compare_status.color = ft.colors.BLUE_700
-        self.page.update()
-
-        def run():
-            def prog(msg):
-                self._compare_status.value = f"⏳ {msg}"
-                self._compare_status.color = ft.colors.BLUE_700
-                self.page.update()
-
-            comparer = self._get_comparer()
-            result   = comparer.compare(selected_ids, question=question,
-                                        progress_callback=prog)
-
-            if not result.success:
-                self._compare_status.value = f"❌ {result.error}"
-                self._compare_status.color = ft.colors.RED_700
-                self.page.update()
-                return
-
-            self._compare_status.value = "✅ 完成，結果在右側對話"
-            self._compare_status.color = ft.colors.GREEN_700
-            titles = "、".join(p.title[:15] + "…" for p in result.papers)
-            self._append_compare_result(result, titles)
-            self.page.update()
-
-        threading.Thread(target=run, daemon=True).start()
-
-    def _append_compare_result(self, result, titles: str):
-        sections = []
-        if result.differences:
-            sections.append(("方法差異",   result.differences,   "#E53935"))
-        if result.similarities:
-            sections.append(("共同點",     result.similarities,  "#43A047"))
-        if result.research_gaps:
-            sections.append(("研究缺口",   result.research_gaps, "#FB8C00"))
-        if result.recommendation:
-            sections.append(("綜合建議",   result.recommendation, "#5E35B1"))
-        if not sections:
-            sections = [("比較分析", result.raw_answer, "#0277BD")]
-
-        inner = [
-            ft.Row([
-                ft.Icon("compare_arrows", size=15, color="#0277BD"),
-                ft.Text(f"跨論文比較：{titles}", size=12,
-                        weight=ft.FontWeight.W_600, color="#0277BD", expand=True),
-            ], spacing=6),
-        ]
-        for label, content, color in sections:
-            inner.append(ft.Container(
-                content=ft.Column([
-                    ft.Text(label, size=11, weight=ft.FontWeight.W_600, color=color),
-                    ft.Text(content, size=12, selectable=True,
-                            color=ft.colors.GREY_800),
-                ], spacing=4),
-                bgcolor="#FAFAFA",
-                border=ft.border.only(left=ft.BorderSide(3, color)),
-                padding=ft.padding.only(left=10, top=6, bottom=6, right=8),
-                border_radius=4,
-            ))
-
-        self._chat_column.controls.append(
-            ft.Container(
-                content=ft.Column(inner, spacing=8),
-                bgcolor="#E1F5FE",
-                border=ft.border.all(1, "#81D4FA"),
-                border_radius=8,
-                padding=14,
-            )
-        )
-
-    # ── 側邊欄 Section 3：PDF 管理（可折疊） ─────────────────────────────
+    # ── 側邊欄 Section 2：PDF 管理（可折疊） ─────────────────────────────
 
     def _build_pdf_panel(self) -> ft.Control:
         self._pdf_status_text = ft.Text("", size=11)
@@ -916,7 +750,7 @@ class QAView:
                     "你可以用自然語言問關於論文庫的任何問題，例如：\n"
                     "• 這些論文最常用什麼研究方法？\n"
                     "• transformer 和 CNN 在這些研究中有什麼差異？\n"
-                    "• 左側可勾選要參與問答的論文，或進行跨論文比較",
+                    "• 左側勾選論文後直接提問，AI 會根據所選文獻回答",
                     size=12, color=ft.colors.GREY_700,
                 ),
             ], spacing=8),
