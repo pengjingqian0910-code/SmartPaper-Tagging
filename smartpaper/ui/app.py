@@ -262,6 +262,10 @@ class ModelPrewarmer:
 
 def main(page: ft.Page):
     """應用程式入口函數"""
+    # 啟動本地 API server（供 Bookmarklet 呼叫，port 7878）
+    from ..services.api_server import start as start_api
+    start_api()
+
     SmartPaperApp(page)
     ModelPrewarmer(page).start()
 

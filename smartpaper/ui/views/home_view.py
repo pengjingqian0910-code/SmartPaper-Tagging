@@ -136,6 +136,9 @@ class HomeView:
 
                 # Row 5: PDF full-text upload card
                 self._build_pdf_card(),
+
+                # Row 6: Bookmarklet install card
+                self._build_bookmarklet_card(),
             ],
             spacing=16,
             scroll=ft.ScrollMode.AUTO,
@@ -768,6 +771,119 @@ class HomeView:
         dlg.open = True
         self.page.update()
 
+    # ── Bookmarklet Card ──────────────────────────────────────────────
+
+    _BOOKMARKLET = (
+        "javascript:(function(){"
+        "var d=null,ax=null,ms=document.querySelectorAll('meta');"
+        "for(var m of ms){"
+        "var n=(m.getAttribute('name')||m.getAttribute('property')||'').toLowerCase(),"
+        "c=m.getAttribute('content')||'';"
+        "if((n.includes('doi')||n==='dc.identifier')&&/^10\\./.test(c)){d=c;break;}}"
+        "if(!d){var u=location.href.match(/doi\\.org\\/(10\\.[^&\\s#?]+)/);if(u)d=u[1];}"
+        "if(!d){var a=document.querySelector('a[href*=\"doi.org/10.\"]');"
+        "if(a){var am=a.href.match(/doi\\.org\\/(10\\.[^&\\s#?]+)/);if(am)d=am[1];}}"
+        "var ax2=location.href.match(/arxiv\\.org\\/(?:abs|pdf)\\/(\\d{4}\\.\\d{4,5})/);if(ax2)ax=ax2[1];"
+        "if(!d&&!ax){alert('SmartPaper: 找不到 DOI 或 arXiv ID，請在論文頁面使用');return;}"
+        "var p=d?'doi='+encodeURIComponent(d):'arxiv='+encodeURIComponent(ax);"
+        "fetch('http://localhost:7878/import?'+p)"
+        ".then(function(r){return r.json();})"
+        ".then(function(j){"
+        "if(j.success)alert('✅ SmartPaper：已加入「'+j.title+'」');"
+        "else alert('❌ SmartPaper：'+j.error);})"
+        ".catch(function(){alert('❌ 無法連接 SmartPaper，請確認應用程式已開啟');});"
+        "})()"
+    )
+
+    def _build_bookmarklet_card(self) -> ft.Container:
+        bm_status = ft.Text("", size=12)
+
+        def _copy_js(e):
+            self.page.set_clipboard(self._BOOKMARKLET)
+            bm_status.value = "✅ 已複製！請在瀏覽器中新增書籤，將網址欄貼上此程式碼"
+            bm_status.color = T.GREEN
+            self.page.update()
+
+        steps = [
+            ("1", "在 Chrome/Edge 開啟書籤列（Ctrl+Shift+B）"),
+            ("2", "點「新增書籤」，名稱填「SmartPaper」"),
+            ("3", "網址欄貼上下方複製的程式碼"),
+            ("4", "在任意論文頁面點書籤，即可一鍵加入文獻庫"),
+        ]
+
+        return T.card(
+            ft.Column([
+                ft.Row([
+                    T.icon_badge("bookmark_add", "#0369A1", size=16, bg_size=36),
+                    T.h3("瀏覽器 Bookmarklet"),
+                    ft.Container(expand=True),
+                    ft.Container(
+                        content=ft.Text("需開啟 SmartPaper", size=10, color="#0369A1"),
+                        bgcolor="#E0F2FE",
+                        border_radius=50,
+                        padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                    ),
+                ], spacing=12),
+                T.soft_divider(),
+                ft.Text(
+                    "在瀏覽器中一鍵將論文加入 SmartPaper，支援 Google Scholar、arXiv、Springer、Nature 等",
+                    size=12, color=T.TEXT_M,
+                ),
+                ft.Container(height=4),
+                # 步驟說明
+                ft.Column([
+                    ft.Row([
+                        ft.Container(
+                            content=ft.Text(n, size=10, color="white",
+                                            weight=ft.FontWeight.BOLD),
+                            width=20, height=20, border_radius=10,
+                            bgcolor="#0369A1",
+                            alignment=ft.alignment.center,
+                        ),
+                        ft.Text(txt, size=12, color=T.TEXT_B, expand=True),
+                    ], spacing=10)
+                    for n, txt in steps
+                ], spacing=8),
+                ft.Container(height=4),
+                # 複製按鈕
+                ft.Row([
+                    ft.ElevatedButton(
+                        "複製 Bookmarklet 程式碼",
+                        icon="content_copy",
+                        on_click=_copy_js,
+                        style=ft.ButtonStyle(
+                            bgcolor="#0369A1", color="white",
+                            shape=ft.RoundedRectangleBorder(radius=10),
+                        ),
+                    ),
+                    ft.Text("支援 Chrome · Edge · Firefox · Safari",
+                            size=11, color=T.TEXT_M, italic=True),
+                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                bm_status,
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text("支援自動偵測的來源：", size=11,
+                                weight=ft.FontWeight.W_600, color=T.TEXT_M),
+                        ft.Row([
+                            _source_chip("Google Scholar"),
+                            _source_chip("arXiv"),
+                            _source_chip("Springer"),
+                            _source_chip("Nature"),
+                            _source_chip("IEEE Xplore"),
+                            _source_chip("ACM DL"),
+                            _source_chip("PubMed"),
+                            _source_chip("Semantic Scholar"),
+                        ], spacing=6, wrap=True),
+                    ], spacing=6),
+                    bgcolor="#F0F9FF",
+                    border_radius=8,
+                    border=ft.border.all(1, "#BAE6FD"),
+                    padding=10,
+                ),
+            ], spacing=10),
+            padding=24,
+        )
+
     def _close_dlg(self, dlg):
         dlg.open = False
         self.page.update()
@@ -812,6 +928,16 @@ class HomeView:
 
 
 # ── Module-level helpers ──────────────────────────────────────────────
+
+def _source_chip(text: str) -> ft.Container:
+    return ft.Container(
+        content=ft.Text(text, size=10, color="#0369A1"),
+        padding=ft.padding.symmetric(horizontal=8, vertical=3),
+        border_radius=50,
+        bgcolor="#E0F2FE",
+        border=ft.border.all(1, "#BAE6FD"),
+    )
+
 
 def _feature_pill(text: str) -> ft.Container:
     return ft.Container(
