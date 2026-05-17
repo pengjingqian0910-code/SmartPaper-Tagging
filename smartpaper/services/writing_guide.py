@@ -17,6 +17,9 @@ from .reranker import Reranker
 if TYPE_CHECKING:
     from ..skills import SkillConfig
 
+# forward-ref workaround: OutlineEnrichment is defined after WritingGuideService uses it
+# so we use string annotation in generate_enrichment return type
+
 
 @dataclass
 class CitationGuide:
@@ -33,6 +36,21 @@ class SectionGuide:
     section: str                          # 段落標題/描述
     citations: list[CitationGuide] = field(default_factory=list)
     writing_hint: str = ""                # 整體寫作建議
+
+
+@dataclass
+class ConceptGap:
+    concept: str             # 缺少的概念名稱
+    reason: str              # 為什麼這個概念重要
+    suggested_section: str   # 建議補充到哪個段落
+    paper: Optional[Paper]   # 文獻庫中找到的對應論文（可能為 None）
+    writing_example: str = ""  # 具體寫作範例句
+
+
+@dataclass
+class OutlineEnrichment:
+    follow_up_questions: list[str] = field(default_factory=list)
+    concept_gaps: list[ConceptGap] = field(default_factory=list)
 
 
 class WritingGuideService:
@@ -270,6 +288,201 @@ class WritingGuideService:
                 section=section,
                 writing_hint=f"分析失敗：{str(e)[:80]}",
             )
+
+    def generate_enrichment(
+        self,
+        sections: list[str],
+        guides: list[SectionGuide],
+        progress_callback: Optional[Callable] = None,
+    ) -> "OutlineEnrichment":
+        """
+        Step 3：分析目前大綱的缺口，搜尋文獻庫補強，生成具體寫作範例。
+
+        流程：
+        1. LLM 分析大綱 + 已引用論文 → 找出 follow-up questions + missing concepts
+        2. 對每個 missing concept 語意搜尋文獻庫
+        3. LLM 為每個 concept + paper 生成寫作範例句
+        """
+        def prog(msg):
+            if progress_callback:
+                progress_callback(msg)
+
+        if not self.client:
+            return OutlineEnrichment(
+                follow_up_questions=["未設定 Gemini API Key，無法進行 AI 分析"],
+                concept_gaps=[],
+            )
+
+        # ── 整理目前引用摘要給 LLM ──────────────────────────────────
+        outline_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(sections))
+        citations_summary = ""
+        for guide in guides:
+            if guide.citations:
+                cited_titles = "、".join(
+                    c.paper.title[:30] + ("…" if len(c.paper.title) > 30 else "")
+                    for c in guide.citations
+                )
+                citations_summary += f"- {guide.section}：引用了 {cited_titles}\n"
+            else:
+                citations_summary += f"- {guide.section}：尚無引用論文\n"
+
+        prog("Step 3-1：AI 分析大綱缺口與追問...")
+
+        # ── Call 1：找出 follow-up questions + missing concepts ──────
+        prompt1 = f"""你是一位嚴格的學術寫作顧問，負責檢視論文大綱是否完整、有深度。
+
+作者的論文大綱：
+{outline_text}
+
+目前已建議的引用文獻分布：
+{citations_summary}
+
+請分析並回答：
+1. **追問（Follow-up Questions）**：針對這份大綱，讀者或審稿人可能會提出哪些重要問題？這些問題指出了大綱目前論述不夠深入或需要補強的地方。請提出 3-5 個具體追問。
+2. **概念缺口（Missing Concepts）**：目前引用的文獻缺少哪些重要概念？這些概念如果補入，能讓大綱更全面、論述更有說服力。請提出 3-5 個缺少的概念。
+
+以 JSON 格式回答：
+{{
+    "follow_up_questions": [
+        "問題1（具體指出大綱哪個部分不足）",
+        "問題2...",
+        "..."
+    ],
+    "missing_concepts": [
+        {{
+            "concept": "概念名稱（5-15字）",
+            "reason": "為什麼這個概念重要，缺少它會有什麼問題（30字以內）",
+            "suggested_section": "建議補充到哪個段落（對應上面大綱的段落描述）"
+        }}
+    ]
+}}
+
+只回傳 JSON，不要有其他文字。"""
+
+        try:
+            resp1 = self.client.models.generate_content(
+                model=GEMINI_MODEL, contents=prompt1,
+            )
+            text1 = resp1.text.strip()
+            if "```json" in text1:
+                text1 = text1.split("```json")[1].split("```")[0]
+            elif "```" in text1:
+                text1 = text1.split("```")[1].split("```")[0]
+            data1 = json.loads(text1.strip())
+        except Exception as ex:
+            return OutlineEnrichment(
+                follow_up_questions=[f"分析失敗：{ex}"],
+                concept_gaps=[],
+            )
+
+        follow_up_questions = data1.get("follow_up_questions", [])
+        raw_concepts = data1.get("missing_concepts", [])
+
+        if not raw_concepts:
+            return OutlineEnrichment(
+                follow_up_questions=follow_up_questions,
+                concept_gaps=[],
+            )
+
+        # ── 搜尋文獻庫：為每個 missing concept 找對應論文 ────────────
+        prog(f"Step 3-2：搜尋文獻庫（{len(raw_concepts)} 個概念缺口）...")
+        concept_paper_pairs: list[dict] = []
+        for rc in raw_concepts:
+            concept = rc.get("concept", "")
+            query   = f"{concept} {rc.get('reason', '')}"
+            vr_list = self.vector_db.search(query=query, n_results=3)
+            paper   = None
+            for vr in vr_list:
+                p = self.sqlite_db.get_by_id(vr["paper_id"])
+                if p and p.abstract:
+                    paper = p
+                    break
+            concept_paper_pairs.append({
+                "concept":           concept,
+                "reason":            rc.get("reason", ""),
+                "suggested_section": rc.get("suggested_section", ""),
+                "paper":             paper,
+            })
+
+        # ── Call 2：生成具體寫作範例 ───────────────────────────────────
+        prog("Step 3-3：AI 生成寫作範例...")
+        pairs_text = ""
+        for i, cp in enumerate(concept_paper_pairs, 1):
+            if cp["paper"]:
+                abstract_preview = (cp["paper"].abstract or "")[:250]
+                pairs_text += (
+                    f"{i}. 概念：{cp['concept']}\n"
+                    f"   論文：{cp['paper'].title}\n"
+                    f"   摘要片段：{abstract_preview}\n\n"
+                )
+            else:
+                pairs_text += (
+                    f"{i}. 概念：{cp['concept']}\n"
+                    f"   （文獻庫中暫無對應論文，請考慮補充外部文獻）\n\n"
+                )
+
+        prompt2 = f"""你是學術寫作助理，請為以下每個「概念缺口」生成一段具體的學術寫作範例。
+
+論文大綱：
+{outline_text}
+
+概念缺口與對應論文：
+{pairs_text}
+
+對於每個有對應論文的概念缺口，請生成：
+1. 一段 30-60 字的示範寫作句子（以「基於」、「根據」、「依據」、「X研究指出」等學術用語開頭，自然融入引用概念）
+2. 說明這段文字適合放在論文的哪個位置/如何銜接
+
+對於沒有對應論文的概念缺口，說明建議補充什麼類型的外部文獻。
+
+以 JSON 格式回答：
+{{
+    "examples": [
+        {{
+            "index": 1,
+            "writing_example": "示範寫作句子（有論文的情況）",
+            "placement_tip": "建議放在哪個段落的哪個位置，以及如何與前後文銜接（25字以內）"
+        }}
+    ]
+}}
+
+只回傳 JSON，不要有其他文字。"""
+
+        try:
+            resp2 = self.client.models.generate_content(
+                model=GEMINI_MODEL, contents=prompt2,
+            )
+            text2 = resp2.text.strip()
+            if "```json" in text2:
+                text2 = text2.split("```json")[1].split("```")[0]
+            elif "```" in text2:
+                text2 = text2.split("```")[1].split("```")[0]
+            data2 = json.loads(text2.strip())
+            examples_map = {ex["index"]: ex for ex in data2.get("examples", [])}
+        except Exception:
+            examples_map = {}
+
+        # ── 組裝 ConceptGap 列表 ───────────────────────────────────────
+        concept_gaps = []
+        for i, cp in enumerate(concept_paper_pairs, 1):
+            ex = examples_map.get(i, {})
+            writing_example = ex.get("writing_example", "")
+            placement_tip   = ex.get("placement_tip", "")
+            if placement_tip:
+                writing_example = writing_example + f"\n💡 {placement_tip}"
+            concept_gaps.append(ConceptGap(
+                concept=cp["concept"],
+                reason=cp["reason"],
+                suggested_section=cp["suggested_section"],
+                paper=cp["paper"],
+                writing_example=writing_example,
+            ))
+
+        prog("Step 3 完成")
+        return OutlineEnrichment(
+            follow_up_questions=follow_up_questions,
+            concept_gaps=concept_gaps,
+        )
 
     def export_guide_to_markdown(
         self,
