@@ -737,7 +737,7 @@ def cmd_ui(args):
         from smartpaper.ui.app import main as ui_main
 
         console.print("[blue]啟動圖形介面...[/blue]")
-        ft.app(target=ui_main, port=8550, view=ft.AppView.FLET_APP)
+        ft.app(target=ui_main, view=ft.AppView.FLET_APP)
     except ImportError:
         console.print("[red]錯誤：請先安裝 Flet - pip install flet[/red]")
         sys.exit(1)
