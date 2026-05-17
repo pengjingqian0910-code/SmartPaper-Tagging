@@ -10,6 +10,9 @@ import threading
 from ...services.pipeline import Pipeline
 from ...services.ingestion import XLSXIngestion
 from ...services.quick_import import QuickImportService
+from ...services.pdf_ingestion import PDFIngestionService
+from ...services.pdf_import_service import PDFImportService, ExtractedMeta
+from ...database.sqlite_db import SQLiteDB
 from ...models import ProcessingStatus
 from .. import theme as T
 
@@ -19,6 +22,12 @@ class HomeView:
         self.page = page
         self.pipeline = Pipeline()
         self._quick_importer: Optional[QuickImportService] = None
+        self._pdf_ingestor: Optional[PDFIngestionService] = None
+        self._pdf_importer: Optional[PDFImportService] = None
+        self._sqlite = SQLiteDB()
+        self._pdf_status: Optional[ft.Text] = None
+        self._pdf_queue: list[dict] = []
+        self._pdf_queue_col: Optional[ft.Column] = None
         self.selected_file: Optional[str] = None
         self.is_processing = False
         self._headers: list[tuple[int, str]] = []
@@ -124,6 +133,9 @@ class HomeView:
 
                 # Row 4: Quick import card (DOI / arXiv)
                 self._build_quick_import_card(),
+
+                # Row 5: PDF full-text upload card
+                self._build_pdf_card(),
             ],
             spacing=16,
             scroll=ft.ScrollMode.AUTO,
@@ -523,7 +535,279 @@ class HomeView:
             self._qi_btn.disabled = False
             self.page.update()
 
-        import threading
+        threading.Thread(target=run, daemon=True).start()
+
+    # ── PDF Full-text Card ────────────────────────────────────────────
+
+    def _build_pdf_card(self) -> ft.Container:
+        self._pdf_status = ft.Text("", size=12, color=T.GREEN)
+        self._pdf_queue_col = ft.Column(spacing=6)
+
+        pick_btn = T.pill_btn(
+            "選擇 PDF（可多選）", "upload_file",
+            self._on_pick_pdfs, filled=False,
+        )
+        import_all_btn = T.pill_btn(
+            "一鍵匯入全部", "cloud_upload",
+            self._on_import_pdfs, filled=True,
+        )
+        new_paper_btn = ft.OutlinedButton(
+            "從 PDF 自動建立新論文",
+            icon="auto_awesome",
+            on_click=self._on_pick_pdf_new,
+            style=ft.ButtonStyle(color="#6A1B9A"),
+        )
+
+        return T.card(
+            ft.Column([
+                ft.Row([
+                    T.icon_badge("picture_as_pdf", "#C62828", size=16, bg_size=36),
+                    T.h3("上傳 PDF 全文"),
+                ], spacing=12),
+                T.soft_divider(),
+                ft.Text(
+                    "上傳 PDF 後可用「問論文」功能進行章節級精準問答",
+                    size=12, color=T.TEXT_M,
+                ),
+                # 操作列
+                ft.Row([pick_btn, import_all_btn, new_paper_btn],
+                       spacing=10, wrap=True,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                # 佇列（選完 PDF 後顯示）
+                self._pdf_queue_col,
+                self._pdf_status,
+            ], spacing=10),
+            padding=24,
+        )
+
+    def _on_pick_pdfs(self, e):
+        """選擇多個 PDF，加入佇列等待指定論文"""
+        def on_result(result):
+            if not result.files:
+                return
+            papers = self._sqlite.get_all(limit=500)
+            opts = [
+                ft.dropdown.Option(
+                    str(p.id),
+                    f"[{p.id}] {p.title[:50]}{'…' if len(p.title) > 50 else ''}"
+                    + (f" ({p.year})" if p.year else ""),
+                )
+                for p in papers
+            ]
+            for f in result.files:
+                if not f.path:
+                    continue
+                dd = ft.Dropdown(
+                    hint_text="選擇對應論文",
+                    options=opts,
+                    expand=True,
+                    dense=True,
+                )
+                entry = {"path": f.path, "name": f.name, "dd": dd}
+                self._pdf_queue.append(entry)
+
+                def _remove(e, en=entry):
+                    self._pdf_queue = [x for x in self._pdf_queue if x is not en]
+                    if "row" in en and en["row"] in self._pdf_queue_col.controls:
+                        self._pdf_queue_col.controls.remove(en["row"])
+                    self.page.update()
+
+                row = ft.Row([
+                    ft.Icon("picture_as_pdf", color=ft.colors.RED_400, size=16),
+                    ft.Text(f.name, size=11, width=160, overflow=ft.TextOverflow.ELLIPSIS),
+                    dd,
+                    ft.IconButton(icon="close", icon_size=16, on_click=_remove),
+                ], spacing=6)
+                entry["row"] = row
+                self._pdf_queue_col.controls.append(row)
+            self.page.update()
+
+        picker = ft.FilePicker()
+        picker.on_result = on_result
+        self.page.overlay.append(picker)
+        self.page.update()
+        picker.pick_files(
+            dialog_title="選擇 PDF 論文（可多選）",
+            allowed_extensions=["pdf"],
+            allow_multiple=True,
+        )
+
+    def _on_import_pdfs(self, e):
+        """把佇列裡有指定論文的 PDF 全部匯入"""
+        pending = [en for en in self._pdf_queue if en.get("dd") and en["dd"].value]
+        if not pending:
+            self._pdf_status.value = "⚠️ 請先選擇 PDF 並為每個檔案指定對應論文"
+            self._pdf_status.color = T.ROSE
+            self.page.update()
+            return
+
+        self._pdf_status.value = f"⏳ 匯入 {len(pending)} 個 PDF..."
+        self._pdf_status.color = T.ACCENT
+        self.page.update()
+
+        def run():
+            if not self._pdf_ingestor:
+                self._pdf_ingestor = PDFIngestionService()
+            ok, fail = 0, 0
+            for en in pending:
+                pid = int(en["dd"].value)
+                def _prog(msg, name=en["name"]):
+                    self._pdf_status.value = f"⏳ [{name}] {msg}"
+                    self._pdf_status.color = T.ACCENT
+                    self.page.update()
+                res = self._pdf_ingestor.ingest(en["path"], pid,
+                                                replace_existing=True,
+                                                progress_callback=_prog)
+                if res.success:
+                    ok += 1
+                else:
+                    fail += 1
+
+            self._pdf_queue.clear()
+            self._pdf_queue_col.controls.clear()
+            self._pdf_status.value = f"✅ 完成：{ok} 成功，{fail} 失敗"
+            self._pdf_status.color = T.GREEN if fail == 0 else T.ROSE
+            # 更新統計
+            new_stats = self._get_stats()
+            self.stats_row.controls = self._build_stats_row(new_stats).controls
+            self.page.update()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_pick_pdf_new(self, e):
+        """選一個 PDF，AI 萃取 metadata 後彈出確認對話框新增論文"""
+        def on_result(result):
+            if not result.files or not result.files[0].path:
+                return
+            f = result.files[0]
+            self._pdf_status.value = f"⏳ AI 分析中：{f.name}..."
+            self._pdf_status.color = "#6A1B9A"
+            self.page.update()
+
+            def run():
+                def _prog(msg):
+                    self._pdf_status.value = f"⏳ {msg}"
+                    self._pdf_status.color = "#6A1B9A"
+                    self.page.update()
+
+                if not self._pdf_importer:
+                    self._pdf_importer = PDFImportService()
+                meta = self._pdf_importer.extract_meta(f.path, progress_callback=_prog)
+                self._pdf_status.value = "完成分析，請確認論文資訊"
+                self._pdf_status.color = T.GREEN
+                self._show_new_paper_dialog(f.path, f.name, meta)
+                self.page.update()
+
+            threading.Thread(target=run, daemon=True).start()
+
+        picker = ft.FilePicker()
+        picker.on_result = on_result
+        self.page.overlay.append(picker)
+        self.page.update()
+        picker.pick_files(
+            dialog_title="選擇要匯入的 PDF 論文",
+            allowed_extensions=["pdf"],
+            allow_multiple=False,
+        )
+
+    def _show_new_paper_dialog(self, pdf_path: str, filename: str, meta: ExtractedMeta):
+        title_f = ft.TextField(label="標題 *", value=meta.title, multiline=True,
+                               min_lines=1, max_lines=3)
+        authors_f = ft.TextField(label="作者（逗號分隔）",
+                                 value=", ".join(meta.authors))
+        year_f = ft.TextField(label="年份", value=str(meta.year) if meta.year else "",
+                              width=100)
+        venue_f = ft.TextField(label="期刊/會議", value=meta.venue, expand=True)
+        doi_f = ft.TextField(label="DOI（選填）", value=meta.doi, expand=True)
+        abstract_f = ft.TextField(label="摘要", value=meta.abstract,
+                                  multiline=True, min_lines=3, max_lines=6)
+        tags_f = ft.TextField(label="標籤（逗號分隔）",
+                              value=", ".join(meta.tags))
+        status_t = ft.Text("", size=12)
+
+        def _collect() -> ExtractedMeta:
+            authors = [a.strip() for a in (authors_f.value or "").split(",") if a.strip()]
+            try:
+                year = int(year_f.value.strip()) if year_f.value and year_f.value.strip() else None
+            except ValueError:
+                year = None
+            tags = [t.strip() for t in (tags_f.value or "").split(",") if t.strip()]
+            return ExtractedMeta(
+                title=(title_f.value or "").strip(),
+                authors=authors, year=year,
+                venue=(venue_f.value or "").strip(),
+                doi=(doi_f.value or "").strip(),
+                abstract=(abstract_f.value or "").strip(),
+                tags=tags,
+            )
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"確認論文資訊：{filename}", size=15,
+                          weight=ft.FontWeight.W_600),
+            content=ft.Container(
+                content=ft.Column([
+                    title_f,
+                    ft.Row([authors_f, year_f], spacing=8),
+                    ft.Row([venue_f, doi_f], spacing=8),
+                    abstract_f, tags_f, status_t,
+                ], spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=680, height=480,
+            ),
+            actions=[
+                ft.TextButton("取消", on_click=lambda e: self._close_dlg(dlg)),
+                ft.ElevatedButton(
+                    "確認匯入", icon="save",
+                    style=ft.ButtonStyle(bgcolor="#6A1B9A", color=ft.colors.WHITE),
+                    on_click=lambda e: self._do_import_new(dlg, pdf_path, _collect, status_t),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dlg
+        dlg.open = True
+        self.page.update()
+
+    def _close_dlg(self, dlg):
+        dlg.open = False
+        self.page.update()
+
+    def _do_import_new(self, dlg, pdf_path: str, collect_fn, status_t: ft.Text):
+        confirmed = collect_fn()
+        if not confirmed.title.strip():
+            status_t.value = "⚠️ 標題不能為空"
+            status_t.color = T.ROSE
+            self.page.update()
+            return
+
+        status_t.value = "⏳ 匯入中..."
+        status_t.color = T.ACCENT
+        self.page.update()
+
+        def run():
+            def _prog(msg):
+                status_t.value = f"⏳ {msg}"
+                status_t.color = T.ACCENT
+                self.page.update()
+
+            if not self._pdf_importer:
+                self._pdf_importer = PDFImportService()
+            res = self._pdf_importer.import_from_pdf(pdf_path, confirmed,
+                                                     progress_callback=_prog)
+            if res.success:
+                dlg.open = False
+                self._pdf_status.value = (
+                    f"✅ 已建立：{confirmed.title[:50]}"
+                    + (f"，{res.total_chunks} chunks" if res.total_chunks else "")
+                )
+                self._pdf_status.color = T.GREEN
+                new_stats = self._get_stats()
+                self.stats_row.controls = self._build_stats_row(new_stats).controls
+            else:
+                status_t.value = f"❌ {res.error}"
+                status_t.color = T.ROSE
+            self.page.update()
+
         threading.Thread(target=run, daemon=True).start()
 
 

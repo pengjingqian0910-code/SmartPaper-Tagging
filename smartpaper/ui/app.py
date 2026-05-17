@@ -257,35 +257,13 @@ class ModelPrewarmer:
         self._set_status("")
 
     def _set_status(self, msg: str):
-        try:
-            self._status.value = msg
-            self._page.update()
-        except Exception:
-            pass
+        pass  # overlay removed; prewarming runs silently in background
 
 
 def main(page: ft.Page):
     """應用程式入口函數"""
     SmartPaperApp(page)
-
-    # 右下角模型載入狀態列
-    warmer = ModelPrewarmer(page)
-    status_bar = ft.Container(
-        content=ft.Row(
-            [
-                ft.Icon(ft.icons.MEMORY_OUTLINED, size=13, color="#9CA3AF"),
-                warmer.status_widget,
-            ],
-            spacing=4,
-            tight=True,
-        ),
-        padding=ft.padding.only(right=12, bottom=6),
-        alignment=ft.alignment.bottom_right,
-    )
-    page.overlay.append(status_bar)
-    page.update()
-
-    warmer.start()
+    ModelPrewarmer(page).start()
 
 
 if __name__ == "__main__":

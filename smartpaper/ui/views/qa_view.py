@@ -87,8 +87,8 @@ class QAView:
         self._send_btn: Optional[ft.ElevatedButton] = None
         self._top_k = 5
         self._loading = False
-        # PDF 管理
-        self._pdf_panel_visible = True
+        # PDF 管理（預設收起，避免版面過長）
+        self._pdf_panel_visible = False
         self._pdf_status_text: Optional[ft.Text] = None
         # 來源選擇
         self._source_paper_ids: Optional[set[int]] = None
@@ -189,36 +189,10 @@ class QAView:
             on_click=self._on_clear,
         )
 
-        self._top_k_dd = ft.Dropdown(
-            label="來源數量",
-            value="5",
-            options=[
-                ft.dropdown.Option("3", "3 個"),
-                ft.dropdown.Option("5", "5 個（推薦）"),
-                ft.dropdown.Option("8", "8 個"),
-                ft.dropdown.Option("10", "10 個"),
-            ],
-            width=140,
-        )
-        self._top_k_dd.on_change = lambda e: setattr(self, "_top_k", int(e.control.value))
-
         input_row = ft.Row(
             [self._input, self._send_btn, clear_btn],
             alignment=ft.MainAxisAlignment.START,
             vertical_alignment=ft.CrossAxisAlignment.END,
-        )
-
-        settings_row = ft.Row(
-            [
-                ft.Icon("tune", size=16, color=ft.colors.GREY_600),
-                ft.Text("來源數量上限：", size=13, color=ft.colors.GREY_700),
-                self._top_k_dd,
-                ft.Text(
-                    "有 PDF 全文的論文會優先使用全文 chunk 作答",
-                    size=12, color=ft.colors.GREY_500, italic=True,
-                ),
-            ],
-            spacing=8,
         )
 
         return ft.Column(
@@ -234,7 +208,6 @@ class QAView:
                 chat_container,
                 ft.Divider(height=8),
                 input_row,
-                settings_row,
             ],
             expand=True,
             spacing=8,
@@ -282,7 +255,7 @@ class QAView:
             style=ft.ButtonStyle(bgcolor="#1565C0", color=ft.colors.WHITE),
         )
 
-        toggle_btn = ft.TextButton(text="▼ 收起", on_click=self._toggle_pdf_panel)
+        toggle_btn = ft.TextButton(text="▶ 展開", on_click=self._toggle_pdf_panel)
         self._toggle_btn = toggle_btn
 
         self._pdf_panel_content = ft.Column([
@@ -370,6 +343,10 @@ class QAView:
             # 跨論文比較
             self._build_compare_panel(),
         ], spacing=10)
+
+        # 預設收起：把標題列以外的所有子元素隱藏
+        for ctrl in self._pdf_panel_content.controls[1:]:
+            ctrl.visible = False
 
         return ft.Container(
             content=self._pdf_panel_content,
