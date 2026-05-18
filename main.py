@@ -4,6 +4,11 @@ SmartPaper-Tagging CLI
 智能學術文獻標籤管理系統命令列介面
 """
 
+# Python 3.12 on Windows: mimetypes.read_windows_registry() can hang
+# due to malformed registry entries. Pre-init with no files to skip it.
+import mimetypes
+mimetypes.init([])
+
 import argparse
 import sys
 from pathlib import Path
