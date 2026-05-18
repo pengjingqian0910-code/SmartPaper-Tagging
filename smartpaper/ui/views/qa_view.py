@@ -274,7 +274,8 @@ class QAView:
         for p in papers:
             has_ft = p.id in fulltext_ids
             cb = ft.Checkbox(
-                value=has_ft, scale=0.82,
+                value=True,  # 預設全選，讓摘要論文也參與問答
+                scale=0.82,
                 on_change=lambda e: self._on_source_changed(),
             )
             self._source_checkboxes[p.id] = cb
