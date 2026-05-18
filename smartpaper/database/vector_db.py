@@ -13,6 +13,20 @@ from ..models import Paper, SearchResult
 
 FULLTEXT_COLLECTION = "papers_fulltext"
 
+# ── 全域 singleton：embedding model 整個 process 只載入一次 ─────────────────
+_SHARED_EMBEDDING_FN: Optional[SentenceTransformerEmbeddingFunction] = None
+
+
+def _get_embedding_fn() -> SentenceTransformerEmbeddingFunction:
+    global _SHARED_EMBEDDING_FN
+    if _SHARED_EMBEDDING_FN is None:
+        print(f"[VectorDB] 載入嵌入模型：{EMBEDDING_MODEL}（首次載入約需 10-30 秒）")
+        _SHARED_EMBEDDING_FN = SentenceTransformerEmbeddingFunction(
+            model_name=EMBEDDING_MODEL,
+        )
+        print("[VectorDB] 嵌入模型載入完成")
+    return _SHARED_EMBEDDING_FN
+
 
 class VectorDB:
     """ChromaDB 向量資料庫管理類"""
@@ -38,10 +52,7 @@ class VectorDB:
             settings=Settings(anonymized_telemetry=False),
         )
 
-        # 使用 allenai-specter 學術領域專用嵌入模型
-        embedding_fn = SentenceTransformerEmbeddingFunction(
-            model_name=EMBEDDING_MODEL,
-        )
+        embedding_fn = _get_embedding_fn()
 
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
