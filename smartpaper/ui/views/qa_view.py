@@ -849,27 +849,23 @@ class QAView:
                             color=ft.colors.GREY_800, expand=True,
                             overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
                     ft.Row(section_badges, spacing=3),
-                    ft.Tooltip(
-                        message=f"複製 APA：\n{apa_text}",
-                        content=ft.TextButton(
-                            "APA",
-                            style=ft.ButtonStyle(
-                                color=ft.colors.INDIGO_600,
-                                padding=ft.padding.symmetric(horizontal=6, vertical=0),
-                            ),
-                            on_click=lambda e, t=apa_text: self.page.set_clipboard(t),
+                    ft.TextButton(
+                        "APA",
+                        tooltip=f"複製 APA：\n{apa_text}",
+                        style=ft.ButtonStyle(
+                            color=ft.colors.INDIGO_600,
+                            padding=ft.padding.symmetric(horizontal=6, vertical=0),
                         ),
+                        on_click=lambda e, t=apa_text: self.page.set_clipboard(t),
                     ),
-                    ft.Tooltip(
-                        message=f"複製 MLA：\n{mla_text}",
-                        content=ft.TextButton(
-                            "MLA",
-                            style=ft.ButtonStyle(
-                                color=ft.colors.TEAL_600,
-                                padding=ft.padding.symmetric(horizontal=6, vertical=0),
-                            ),
-                            on_click=lambda e, t=mla_text: self.page.set_clipboard(t),
+                    ft.TextButton(
+                        "MLA",
+                        tooltip=f"複製 MLA：\n{mla_text}",
+                        style=ft.ButtonStyle(
+                            color=ft.colors.TEAL_600,
+                            padding=ft.padding.symmetric(horizontal=6, vertical=0),
                         ),
+                        on_click=lambda e, t=mla_text: self.page.set_clipboard(t),
                     ),
                 ], spacing=6),
                 bgcolor=COLOR_SOURCE_BG,
