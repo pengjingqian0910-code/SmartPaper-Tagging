@@ -118,6 +118,10 @@ class QAView:
         self._pdf_mgmt_visible = False
         self._pdf_mgmt_content: Optional[ft.Column] = None
         self._pdf_toggle_btn: Optional[ft.TextButton] = None
+        # FilePicker 實例（重用，避免 overlay 累積）
+        self._multi_picker: Optional[ft.FilePicker] = None
+        self._single_picker: Optional[ft.FilePicker] = None
+        self._new_paper_picker: Optional[ft.FilePicker] = None
 
     # ── 懶載入 ────────────────────────────────────────────────────────────
 
@@ -146,6 +150,14 @@ class QAView:
 
     def build(self) -> ft.Control:
         self._history = []
+
+        # 建立並註冊 FilePicker（各功能重用同一個，不重複加到 overlay）
+        self._multi_picker = ft.FilePicker()
+        self._single_picker = ft.FilePicker()
+        self._new_paper_picker = ft.FilePicker()
+        self.page.overlay.extend([
+            self._multi_picker, self._single_picker, self._new_paper_picker,
+        ])
 
         # ── 右側：聊天區 ──────────────────────────────────────────────
         self._chat_column = ft.Column(
@@ -432,12 +444,9 @@ class QAView:
                 self._queue_col.controls.append(row)
             self.page.update()
 
-        picker = ft.FilePicker()
-        picker.on_result = on_result
-        self.page.overlay.append(picker)
-        self.page.update()
-        picker.pick_files(dialog_title="選擇 PDF（可多選）",
-                          allowed_extensions=["pdf"], allow_multiple=True)
+        self._multi_picker.on_result = on_result
+        self._multi_picker.pick_files(dialog_title="選擇 PDF（可多選）",
+                                      allowed_extensions=["pdf"], allow_multiple=True)
 
     def _remove_from_queue(self, entry: dict):
         self._upload_queue = [e for e in self._upload_queue if e is not entry]
@@ -514,12 +523,9 @@ class QAView:
                 self.page.update()
             threading.Thread(target=run, daemon=True).start()
 
-        picker = ft.FilePicker()
-        picker.on_result = on_result
-        self.page.overlay.append(picker)
-        self.page.update()
-        picker.pick_files(dialog_title="選擇 PDF",
-                          allowed_extensions=["pdf"], allow_multiple=False)
+        self._single_picker.on_result = on_result
+        self._single_picker.pick_files(dialog_title="選擇 PDF",
+                                       allowed_extensions=["pdf"], allow_multiple=False)
 
     def _on_delete_one(self, paper_id: int):
         ingestor = self._get_ingestor()
@@ -553,14 +559,11 @@ class QAView:
                 self.page.update()
             threading.Thread(target=run, daemon=True).start()
 
-        picker = ft.FilePicker()
-        picker.on_result = on_result
-        self.page.overlay.append(picker)
-        self.page.update()
-        picker.pick_files(dialog_title="選擇論文 PDF",
-                          allowed_extensions=["pdf"], allow_multiple=False)
+        self._new_paper_picker.on_result = on_result
+        self._new_paper_picker.pick_files(dialog_title="選擇論文 PDF",
+                                          allowed_extensions=["pdf"], allow_multiple=False)
 
-    async def _show_meta_dialog(self, pdf_path: str, filename: str, meta: ExtractedMeta):
+    def _show_meta_dialog(self, pdf_path: str, filename: str, meta: ExtractedMeta):
         title_f = ft.TextField(label="標題 *", value=meta.title,
                                multiline=True, min_lines=1, max_lines=3)
         authors_f = ft.TextField(label="作者（逗號分隔）",
@@ -734,14 +737,17 @@ class QAView:
             self._set_loading(False)
             self._chat_column.update()
 
-            # 背景生成追問建議（不阻塞主回答顯示）
-            try:
-                suggestions = service.suggest_followups(question, result.answer)
-                if suggestions:
-                    self._append_followup_chips(suggestions)
-                    self._chat_column.update()
-            except Exception:
-                pass
+            # 追問建議：獨立 thread，避免與下一輪問答 race condition
+            captured_answer = result.answer
+            def _suggest():
+                try:
+                    suggestions = service.suggest_followups(question, captured_answer)
+                    if suggestions and not self._loading:
+                        self._append_followup_chips(suggestions)
+                        self._chat_column.update()
+                except Exception:
+                    pass
+            threading.Thread(target=_suggest, daemon=True).start()
 
         threading.Thread(target=run, daemon=True).start()
 
