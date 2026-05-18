@@ -14,6 +14,12 @@ try:
 except ImportError:
     PDFPLUMBER_AVAILABLE = False
 
+try:
+    import pymupdf4llm
+    PYMUPDF4LLM_AVAILABLE = True
+except ImportError:
+    PYMUPDF4LLM_AVAILABLE = False
+
 
 # ── 已知 section 名稱（英文，小寫）
 KNOWN_SECTIONS_EN = {
@@ -352,6 +358,129 @@ def _format_table(table: list[list]) -> Optional[str]:
 
 _MIN_PAGE_CHARS = 30  # 少於此字元才嘗試下一個策略
 
+# Markdown header pattern（pymupdf4llm 輸出 # / ## / ### / ####）
+_RE_MD_HEADER = re.compile(r'^#{1,4}\s+(.+)$')
+
+
+def _parse_with_pymupdf4llm(file_path: Path) -> ParseResult:
+    """
+    主要解析策略：pymupdf4llm → Markdown → 動態 chunk 切割。
+
+    優點：
+    - 多欄版面（學術論文常見）文字順序正確
+    - 標題辨識靠 Markdown ## 而非正則，準確率高
+    - 表格已輸出為 Markdown table 格式，LLM 讀取更自然
+    """
+    result = ParseResult()
+
+    try:
+        page_data = pymupdf4llm.to_markdown(str(file_path), page_chunks=True)
+    except Exception:
+        md_text = pymupdf4llm.to_markdown(str(file_path))
+        page_data = [{"text": md_text, "metadata": {"page": 0}}]
+
+    result.total_pages = len(page_data)
+
+    # ── 1. 逐頁解析，依 Markdown header 切割 section ─────────────────
+    raw_sections: list[tuple[str, str, int]] = []
+    current_section = "preamble"
+    current_page = 1
+    current_lines: list[str] = []
+
+    for chunk in page_data:
+        page_num = chunk.get("metadata", {}).get("page", 0) + 1
+        text = chunk.get("text", "")
+
+        for line in text.split('\n'):
+            m = _RE_MD_HEADER.match(line.strip())
+            if m:
+                if current_lines:
+                    raw_sections.append(
+                        (current_section, '\n'.join(current_lines), current_page)
+                    )
+                current_section = m.group(1).strip()
+                current_page = page_num
+                current_lines = []
+            else:
+                current_lines.append(line)
+
+    if current_lines:
+        raw_sections.append((current_section, '\n'.join(current_lines), current_page))
+
+    # ── 2. 轉換為 chunks（保留原有動態切割策略）────────────────────────
+    chunk_index = 0
+    sections_seen: set[str] = set()
+    total_raw_chars = 0
+
+    for section_name, text, page_num in raw_sections:
+        if _should_skip(section_name):
+            continue
+
+        total_raw_chars += len(text)
+
+        # 從 Markdown 文字中抽出表格區塊（連續 | 開頭的行）
+        lines = text.split('\n')
+        non_table_lines: list[str] = []
+        table_lines: list[str] = []
+        in_table = False
+
+        def _flush_table():
+            nonlocal chunk_index
+            table_text = '\n'.join(table_lines)
+            if len(table_text.strip()) >= 30:
+                s_type, s_weight = _classify_section(section_name)
+                result.chunks.append(ParsedChunk(
+                    section=section_name,
+                    text=f"[表格]\n{table_text.strip()}",
+                    chunk_index=chunk_index,
+                    page_num=page_num,
+                    is_table=True,
+                    section_type=s_type,
+                    importance_weight=s_weight * 1.1,
+                ))
+                chunk_index += 1
+                result.table_count += 1
+
+        def _flush_text():
+            nonlocal chunk_index
+            if not non_table_lines:
+                return
+            new_chunks = _build_chunks_from_section(
+                section_name, '\n'.join(non_table_lines),
+                chunk_index, page_num,
+            )
+            result.chunks.extend(new_chunks)
+            chunk_index += len(new_chunks)
+
+        for line in lines:
+            is_table_row = line.strip().startswith('|')
+            if is_table_row:
+                if not in_table:
+                    _flush_text()
+                    non_table_lines.clear()
+                    in_table = True
+                table_lines.append(line)
+            else:
+                if in_table:
+                    _flush_table()
+                    table_lines.clear()
+                    in_table = False
+                non_table_lines.append(line)
+
+        if in_table:
+            _flush_table()
+        else:
+            _flush_text()
+
+        if section_name not in sections_seen:
+            sections_seen.add(section_name)
+            result.sections_found.append(section_name)
+
+    if total_raw_chars < 50:
+        result.error = "pymupdf4llm 解析後無可用文字"
+
+    return result
+
 
 def _extract_page_text(page) -> str:
     """從 pdfplumber 頁面提取文字，找到足夠文字即停止（快速路徑優先）"""
@@ -404,18 +533,26 @@ def parse_pdf(file_path: str | Path) -> ParseResult:
     解析 PDF 檔案，回傳 ParseResult（chunks + 統計資訊）。
 
     提取策略（依序嘗試直到成功）：
-    1. pdfplumber — 多 tolerance + layout + words 模式
-    2. pypdf      — 備用
-    3. PyMuPDF    — 針對複雜版面 / 特殊字型（需 pip install pymupdf）
-    4. 若全部失敗 → 回傳清楚的錯誤訊息
+    1. pymupdf4llm — Markdown 轉換，多欄 / 標題 / 表格最準確（推薦）
+    2. pdfplumber  — 多 tolerance + layout + words 模式（fallback）
+    3. pypdf       — 純文字備用
+    4. PyMuPDF     — 針對複雜版面 / 特殊字型
+    5. 若全部失敗  → 回傳清楚的錯誤訊息
     """
-    if not PDFPLUMBER_AVAILABLE:
-        return ParseResult(error="pdfplumber 未安裝，請執行 pip install pdfplumber")
-
     file_path = Path(file_path)
     if not file_path.exists():
         return ParseResult(error=f"找不到檔案：{file_path}")
 
+    # ── 策略 1：pymupdf4llm（主要，最高品質）────────────────────────────
+    if PYMUPDF4LLM_AVAILABLE:
+        try:
+            result = _parse_with_pymupdf4llm(file_path)
+            if not result.error and result.chunks:
+                return result
+        except Exception as e:
+            print(f"[pdf_parser] pymupdf4llm 失敗，改用 pdfplumber：{e}")
+
+    # ── 策略 2 以下：pdfplumber fallback ────────────────────────────────
     result = ParseResult()
     chunk_index = 0
     total_raw_chars = 0
