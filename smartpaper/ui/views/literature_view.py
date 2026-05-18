@@ -1,9 +1,8 @@
 """
 文獻分析視圖
-三個子頁：
-1. 自動大綱生成 — 主題 → 段落結構 + 每段推薦引用
-2. 文獻回顧表格 — 勾選欄位 → LLM 萃取 → Excel
-3. 論文比較     — 選 2-6 篇 → LLM 比較維度表
+兩個子頁：
+1. 文獻回顧表格 — 勾選欄位 → LLM 萃取 → Excel
+2. 論文比較     — 選 2-6 篇 → LLM 比較維度表
 """
 
 import flet as ft
@@ -15,12 +14,6 @@ from ...services.literature_analyzer import (
 from ...database.sqlite_db import SQLiteDB
 from ...config import GEMINI_API_KEY
 
-
-_POSITION_COLOR = {
-    "開頭": "#388E3C",
-    "中間": "#1976D2",
-    "結尾": "#7B1FA2",
-}
 
 # ── 共用色彩 ──────────────────────────────────────────────────────────────
 _C_BORDER   = "#E2E8F0"
@@ -63,7 +56,6 @@ class LiteratureView:
             selected_index=0,
             animation_duration=200,
             tabs=[
-                ft.Tab(text="自動大綱生成",  icon="auto_awesome",    content=self._build_outline_tab()),
                 ft.Tab(text="文獻回顧表格",  icon="table_chart",     content=self._build_review_tab()),
                 ft.Tab(text="論文比較分析",  icon="compare_arrows",  content=self._build_compare_tab()),
             ],
@@ -75,7 +67,7 @@ class LiteratureView:
                 ft.Row([
                     ft.Column([
                         ft.Text("文獻分析", size=24, weight=ft.FontWeight.BOLD, color=_C_TITLE),
-                        ft.Text("大綱生成 · 文獻回顧表格 · 論文比較", size=12, color=_C_META),
+                        ft.Text("文獻回顧表格 · 論文比較分析", size=12, color=_C_META),
                     ], spacing=2),
                     ft.Container(expand=True),
                     ft.Row([self.progress, self.status], spacing=8),
@@ -88,206 +80,7 @@ class LiteratureView:
         )
 
     # ════════════════════════════════════════════════════════════
-    # Tab 1: 自動大綱生成
-    # ════════════════════════════════════════════════════════════
-
-    def _build_outline_tab(self) -> ft.Control:
-        self.outline_topic = ft.TextField(
-            label="研究主題",
-            hint_text="例如：深度學習在醫療影像診斷的應用",
-            expand=True,
-            border_radius=8,
-        )
-        self.outline_n = ft.Dropdown(
-            label="候選論文數",
-            value="15",
-            options=[ft.dropdown.Option(str(n), f"{n} 篇") for n in [10, 15, 20, 25]],
-            width=110,
-            border_radius=8,
-        )
-        self.outline_results = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=10, expand=True)
-        self.outline_export_btn = ft.OutlinedButton(
-            "匯出 Markdown", icon="download",
-            on_click=self._on_outline_export, visible=False,
-        )
-        self._outline_data = None
-
-        gen_btn = ft.ElevatedButton(
-            "生成大綱", icon="auto_awesome",
-            on_click=self._on_gen_outline,
-            disabled=not GEMINI_API_KEY,
-            style=ft.ButtonStyle(bgcolor=ft.colors.INDIGO_600, color=ft.colors.WHITE),
-        )
-
-        return ft.Container(
-            content=ft.Column([
-                _card(ft.Column([
-                    ft.Row([self.outline_topic, self.outline_n], spacing=10),
-                    ft.Row([gen_btn, self.outline_export_btn], spacing=10),
-                    ft.Text("系統將自動建議段落結構，並為每個段落推薦應引用的論文",
-                            size=11, color=_C_META),
-                ], spacing=10)),
-                ft.Container(content=self.outline_results, expand=True),
-            ], spacing=10, expand=True),
-            padding=ft.padding.only(top=12),
-            expand=True,
-        )
-
-    def _on_gen_outline(self, e):
-        topic = self.outline_topic.value.strip()
-        if not topic:
-            return
-        self._set_busy("生成大綱中...")
-        self.outline_results.controls.clear()
-        self.outline_export_btn.visible = False
-        self.page.update()
-
-        def _progress(msg):
-            self.status.value = msg
-            self.page.update()
-
-        import threading
-        def _run():
-            try:
-                sections = self.analyzer.generate_outline(
-                    topic=topic,
-                    n_candidates=int(self.outline_n.value or "15"),
-                    progress_callback=_progress,
-                )
-                self._outline_data = sections
-                self._render_outline(sections)
-                self.outline_export_btn.visible = True
-                self.status.value = (
-                    f"完成：{len(sections)} 個段落，"
-                    f"共推薦 {sum(len(s.papers) for s in sections)} 篇引用"
-                )
-            except Exception as ex:
-                self.status.value = f"錯誤：{ex}"
-            finally:
-                self._set_idle()
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _render_outline(self, sections):
-        for sec in sections:
-            header = ft.Container(
-                content=ft.Row([
-                    ft.Icon("article", color=ft.colors.INDIGO, size=18),
-                    ft.Text(sec.title, size=15, weight=ft.FontWeight.BOLD,
-                            color=ft.colors.INDIGO_900, expand=True),
-                    ft.Container(
-                        content=ft.Text(f"{len(sec.papers)} 篇引用", size=10,
-                                        color=ft.colors.WHITE),
-                        bgcolor=ft.colors.INDIGO_400,
-                        padding=ft.padding.symmetric(horizontal=8, vertical=2),
-                        border_radius=10,
-                    ),
-                ], spacing=8),
-            )
-
-            desc_card = ft.Container(
-                content=ft.Column([
-                    ft.Text(sec.description, size=12, color=ft.colors.GREY_800),
-                    ft.Row([
-                        ft.Icon("lightbulb", size=13, color=ft.colors.AMBER_700),
-                        ft.Text(sec.writing_hint, size=11, color=ft.colors.AMBER_900,
-                                italic=True, expand=True),
-                    ], spacing=4) if sec.writing_hint else ft.Container(),
-                ], spacing=4),
-                padding=ft.padding.symmetric(horizontal=12, vertical=8),
-                bgcolor=ft.colors.INDIGO_50,
-                border_radius=6,
-            )
-
-            paper_cards = []
-            for op in sec.papers:
-                pos_color = _POSITION_COLOR.get(op.cite_position, ft.colors.GREY_700)
-                authors_str = ""
-                if op.paper.authors:
-                    authors_str = f" — {op.paper.authors[0]}" + (
-                        " et al." if len(op.paper.authors) > 1 else "")
-                year_str = f" ({op.paper.year})" if op.paper.year else ""
-
-                paper_cards.append(ft.Container(
-                    content=ft.Row([
-                        ft.Container(
-                            content=ft.Text(op.cite_position, size=9,
-                                            color=ft.colors.WHITE),
-                            bgcolor=pos_color,
-                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
-                            border_radius=8,
-                            width=45,
-                        ),
-                        ft.Column([
-                            ft.Text(
-                                f"{op.paper.title[:70]}{'…' if len(op.paper.title) > 70 else ''}"
-                                f"{year_str}{authors_str}",
-                                size=11, weight=ft.FontWeight.W_500,
-                            ),
-                            ft.Row([
-                                ft.Text("引用原因：", size=10, color=ft.colors.GREY_600),
-                                ft.Text(op.cite_reason, size=10, color=ft.colors.GREY_700,
-                                        expand=True),
-                            ], spacing=2),
-                            ft.Row([
-                                ft.Text("核心概念：", size=10, color=ft.colors.GREY_600),
-                                ft.Text(op.key_concept, size=10,
-                                        color=ft.colors.TEAL_700, expand=True),
-                            ], spacing=2),
-                        ], spacing=3, expand=True),
-                    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
-                    padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                    border=ft.border.all(1, ft.colors.GREY_200),
-                    border_radius=6,
-                    bgcolor=ft.colors.WHITE,
-                ))
-
-            self.outline_results.controls.append(ft.Container(
-                content=ft.Column(
-                    [header, desc_card] + (paper_cards if paper_cards else [
-                        ft.Text("（此段落未找到適合引用的論文）",
-                                size=11, color=ft.colors.GREY_500, italic=True)
-                    ]),
-                    spacing=6,
-                ),
-                padding=12,
-                border=ft.border.all(1, ft.colors.INDIGO_100),
-                border_radius=10,
-                bgcolor=ft.colors.WHITE,
-                shadow=ft.BoxShadow(blur_radius=4, color="#08000000",
-                                    offset=ft.Offset(0, 1)),
-            ))
-
-        self.page.update()
-
-    def _on_outline_export(self, e):
-        if not self._outline_data:
-            return
-        lines = [f"# 大綱：{self.outline_topic.value}\n"]
-        for sec in self._outline_data:
-            lines.append(f"## {sec.title}")
-            lines.append(f"_{sec.description}_")
-            if sec.writing_hint:
-                lines.append(f"\n💡 **寫作提示**：{sec.writing_hint}")
-            if sec.papers:
-                lines.append("\n**推薦引用**：")
-                for op in sec.papers:
-                    year = f" ({op.paper.year})" if op.paper.year else ""
-                    lines.append(f"- [{op.cite_position}] **{op.paper.title}**{year}")
-                    lines.append(f"  - 引用原因：{op.cite_reason}  核心概念：{op.key_concept}")
-            lines.append("")
-
-        import tempfile
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=".md", prefix="outline_", delete=False,
-            mode="w", encoding="utf-8",
-        )
-        tmp.write("\n".join(lines))
-        tmp.close()
-        self.status.value = f"Markdown 已儲存：{tmp.name}"
-        self.page.update()
-
-    # ════════════════════════════════════════════════════════════
-    # Tab 2: 文獻回顧表格  ── 左右分欄
+    # Tab 1: 文獻回顧表格  ── 左右分欄
     # ════════════════════════════════════════════════════════════
 
     def _build_review_tab(self) -> ft.Control:
