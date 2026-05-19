@@ -9,6 +9,7 @@ from typing import Optional, Callable
 from google import genai
 
 from ..api.arxiv import ArxivAPI
+from ..api import semantic_scholar as ss_api
 from ..database.sqlite_db import SQLiteDB
 from ..database.vector_db import VectorDB
 from ..config import GEMINI_API_KEY, GEMINI_MODEL
@@ -413,19 +414,32 @@ class WritingGuideService:
                 "paper":             paper,
             })
 
-        # ── arXiv 外部搜尋：為沒有本地論文的缺口抓外部建議 ─────────────
-        no_paper_gaps = [cp for cp in concept_paper_pairs if cp["paper"] is None]
-        if no_paper_gaps:
-            prog(f"Step 3-2b：arXiv 搜尋外部論文（{len(no_paper_gaps)} 個缺口）...")
-            arxiv_api = ArxivAPI()
-            for cp in no_paper_gaps:
-                query = f"{cp['concept']} {cp['reason']}"
-                cp["external_suggestions"] = arxiv_api.search_by_keywords(
-                    query, n_results=3
-                )
+        # ── 外部論文建議：所有缺口都抓（有 DOI 用 Semantic Scholar，其他用 arXiv）
+        prog(f"Step 3-2b：外部論文搜尋（{len(concept_paper_pairs)} 個缺口）...")
+        arxiv_api = ArxivAPI()
         for cp in concept_paper_pairs:
-            if "external_suggestions" not in cp:
-                cp["external_suggestions"] = []
+            suggestions: list[dict] = []
+            local_paper = cp["paper"]
+            # 優先：本地論文有 DOI → Semantic Scholar 推薦
+            if local_paper and local_paper.doi:
+                try:
+                    ss_recs = ss_api.fetch_recommendations(local_paper.doi, n=3)
+                    for r in ss_recs:
+                        r["source"] = "Semantic Scholar"
+                    suggestions.extend(ss_recs)
+                except Exception:
+                    pass
+            # 補充（或 fallback）：arXiv 關鍵字搜尋
+            if len(suggestions) < 3:
+                try:
+                    query = f"{cp['concept']} {cp['reason']}"
+                    arxiv_recs = arxiv_api.search_by_keywords(query, n_results=3 - len(suggestions))
+                    for r in arxiv_recs:
+                        r["source"] = "arXiv"
+                    suggestions.extend(arxiv_recs)
+                except Exception:
+                    pass
+            cp["external_suggestions"] = suggestions
 
         # ── Call 2：生成具體寫作範例 ───────────────────────────────────
         prog("Step 3-3：AI 生成寫作範例...")

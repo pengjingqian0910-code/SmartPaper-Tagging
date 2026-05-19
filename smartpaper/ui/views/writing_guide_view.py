@@ -581,16 +581,18 @@ class WritingGuideView:
                     ], spacing=6),
                 )
 
-            # ── arXiv 外部建議區 ────────────────────────────────────────
+            # ── 外部論文建議區（Semantic Scholar + arXiv）──────────────
             external_ctrl = ft.Container()
             if gap.external_suggestions:
                 ext_rows = []
                 for ext in gap.external_suggestions:
-                    ext_title = ext.get("title", "")
-                    ext_year  = ext.get("year") or ""
-                    ext_url   = ext.get("url", "")
-                    ext_abs   = ext.get("abstract", "")
+                    ext_title   = ext.get("title", "")
+                    ext_year    = ext.get("year") or ""
+                    ext_url     = ext.get("url", "")
+                    ext_abs     = ext.get("abstract", "")
                     ext_authors = ext.get("authors", [])
+                    ext_source  = ext.get("source", "arXiv")
+                    src_color   = "#2563EB" if ext_source == "Semantic Scholar" else "#7C3AED"
 
                     def _make_import_handler(e_ext=ext):
                         def _import(e):
@@ -600,12 +602,18 @@ class WritingGuideView:
                     ext_rows.append(ft.Container(
                         content=ft.Column([
                             ft.Row([
-                                ft.Icon("open_in_new", size=12, color="#2563EB"),
+                                ft.Icon("open_in_new", size=12, color=src_color),
                                 ft.Text(
                                     ext_title[:70] + ("…" if len(ext_title) > 70 else ""),
                                     size=12, weight=ft.FontWeight.W_500,
-                                    color="#1D4ED8", expand=True,
-                                    tooltip=ext_url,
+                                    color=src_color, expand=True,
+                                    tooltip=ext_url or ext_title,
+                                ),
+                                ft.Container(
+                                    content=ft.Text(ext_source, size=9, color=src_color),
+                                    bgcolor="#EFF6FF" if ext_source == "Semantic Scholar" else "#F5F3FF",
+                                    border_radius=4,
+                                    padding=ft.padding.symmetric(horizontal=5, vertical=2),
                                 ),
                                 ft.Text(str(ext_year), size=10, color=_C_META),
                             ], spacing=6),
@@ -630,8 +638,8 @@ class WritingGuideView:
                                 ),
                             ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
                         ], spacing=4),
-                        bgcolor="#F5F3FF",
-                        border=ft.border.all(1, "#DDD6FE"),
+                        bgcolor="#EFF6FF" if ext_source == "Semantic Scholar" else "#F5F3FF",
+                        border=ft.border.all(1, "#BFDBFE" if ext_source == "Semantic Scholar" else "#DDD6FE"),
                         border_radius=6,
                         padding=ft.padding.symmetric(horizontal=10, vertical=8),
                     ))
@@ -640,7 +648,7 @@ class WritingGuideView:
                     content=ft.Column([
                         ft.Row([
                             ft.Icon("travel_explore", size=13, color="#7C3AED"),
-                            ft.Text("arXiv 外部論文建議", size=11,
+                            ft.Text("外部論文建議", size=11,
                                     weight=ft.FontWeight.W_600, color="#5B21B6"),
                             _chip(f"{len(gap.external_suggestions)} 篇", "#7C3AED"),
                         ], spacing=6),
@@ -679,7 +687,7 @@ class WritingGuideView:
                             color="#5B21B6"),
                     _chip(f"{len(enrichment.concept_gaps)} 個", color),
                 ], spacing=8),
-                ft.Text("補充這些概念可讓大綱更全面，附有文獻庫對應論文、寫作範例與 arXiv 外部建議",
+                ft.Text("補充這些概念可讓大綱更全面，附有文獻庫對應論文、寫作範例，以及 Semantic Scholar / arXiv 外部推薦（可一鍵加入文獻庫）",
                         size=11, color=_C_META),
                 *gap_tiles,
             ], spacing=10)
