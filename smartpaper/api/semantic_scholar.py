@@ -9,7 +9,8 @@ import requests
 from typing import Optional
 
 BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
-FIELDS = "title,externalIds,year,authors"
+REC_URL  = "https://api.semanticscholar.org/recommendations/v1/papers/forpaper"
+FIELDS = "title,externalIds,year,authors,abstract"
 REQUEST_DELAY = 0.5   # 秒，避免觸發 rate limit（100 req/5s）
 
 
@@ -59,6 +60,41 @@ def fetch_references(doi: str) -> list[dict]:
         r for r in (_parse_ref_entry(e, "citedPaper") for e in data.get("data", []))
         if r and r.get("title")
     ]
+
+
+def fetch_recommendations(doi: str, n: int = 8) -> list[dict]:
+    """
+    透過 Semantic Scholar Recommendations API 取得相關論文推薦。
+
+    Args:
+        doi: 論文的 DOI
+        n:   回傳推薦數量上限
+
+    Returns:
+        [{"title": ..., "doi": ..., "year": ..., "authors": [...], "abstract": ...}, ...]
+    """
+    url = f"{REC_URL}/DOI:{doi}"
+    data = _get(url, {"fields": FIELDS, "limit": n})
+    time.sleep(REQUEST_DELAY)
+    if not data:
+        return []
+    results = []
+    for paper in data.get("recommendedPapers", []):
+        if not paper.get("title"):
+            continue
+        ext = paper.get("externalIds") or {}
+        doi_val = ext.get("DOI") or ext.get("doi")
+        arxiv_id = ext.get("ArXiv")
+        authors = [a.get("name", "") for a in (paper.get("authors") or [])]
+        results.append({
+            "title": paper.get("title", ""),
+            "doi": doi_val,
+            "arxiv_id": arxiv_id,
+            "year": paper.get("year"),
+            "authors": authors,
+            "abstract": (paper.get("abstract") or "")[:500],
+        })
+    return results[:n]
 
 
 def fetch_citations(doi: str) -> list[dict]:

@@ -14,6 +14,8 @@ from ...services.pipeline import Pipeline
 from ...services.search import SearchService
 from ...database.chunk_store import ChunkStore
 from ...models import Paper
+from ...api import semantic_scholar as ss_api
+from ...api.arxiv import ArxivAPI
 
 # ── 色彩 ──────────────────────────────────────────────────────────────
 BG        = "#F1F5F9"   # 頁面底色（淺灰藍）
@@ -260,22 +262,56 @@ class _Card:
         self._page.update()
 
         def _run():
+            # ── 本地相似論文
             try:
-                results = self._search_service.find_similar(self.paper.id, n_results=4)
+                local_results = self._search_service.find_similar(self.paper.id, n_results=4)
             except Exception:
-                results = []
+                local_results = []
+
+            # ── 外部推薦（Semantic Scholar）
+            external: list[dict] = []
+            if self.paper.doi:
+                try:
+                    external = ss_api.fetch_recommendations(self.paper.doi, n=5)
+                    # 排除已在本地庫的論文（按標題比對）
+                    local_titles = {r.paper.title.lower() for r in local_results}
+                    external = [
+                        ex for ex in external
+                        if ex["title"].lower() not in local_titles
+                    ][:5]
+                except Exception:
+                    external = []
+
+            # ── arXiv fallback（無 DOI 時）
+            if not external:
+                try:
+                    arxiv = ArxivAPI()
+                    query = self.paper.title
+                    external_raw = arxiv.search_by_keywords(query, n_results=5)
+                    local_titles = {r.paper.title.lower() for r in local_results}
+                    external = [
+                        {
+                            "title": ex["title"],
+                            "doi": None,
+                            "arxiv_id": ex.get("arxiv_id"),
+                            "year": ex.get("year"),
+                            "authors": ex.get("authors", []),
+                            "abstract": (ex.get("abstract") or "")[:400],
+                        }
+                        for ex in external_raw
+                        if ex["title"].lower() not in local_titles
+                    ][:5]
+                except Exception:
+                    external = []
 
             def _done():
-                if not results:
-                    self._similar_col.controls = [
-                        ft.Text("找不到相似論文", size=11, color=META_C)
-                    ]
-                else:
-                    items = [
-                        ft.Text("相似論文推薦", size=11, weight=ft.FontWeight.W_600,
-                                color="#059669"),
-                    ]
-                    for sr in results:
+                items = []
+
+                # 本地相似
+                if local_results:
+                    items.append(ft.Text("📚 文獻庫中的相似論文", size=11,
+                                         weight=ft.FontWeight.W_600, color="#059669"))
+                    for sr in local_results:
                         rp = sr.paper
                         score_pct = int(sr.score * 100) if sr.score <= 1 else int(sr.score)
                         items.append(ft.Container(
@@ -294,7 +330,113 @@ class _Card:
                             bgcolor="#F0FDF4",
                             border=ft.border.all(1, "#BBF7D0"),
                         ))
-                    self._similar_col.controls = items
+                else:
+                    items.append(ft.Text("文獻庫中無相似論文", size=11, color=META_C))
+
+                # 外部推薦
+                if external:
+                    items.append(ft.Container(height=4))
+                    src_label = "🌐 Semantic Scholar 外部推薦" if self.paper.doi else "🌐 arXiv 外部推薦"
+                    items.append(ft.Text(src_label, size=11,
+                                         weight=ft.FontWeight.W_600, color="#2563EB"))
+                    for ex in external:
+                        items.append(self._build_external_rec_card(ex))
+
+                if not local_results and not external:
+                    items = [ft.Text("找不到相似論文", size=11, color=META_C)]
+
+                self._similar_col.controls = items
+                self._page.update()
+
+            self._page.run_task(_async_done, _done)
+
+        async def _async_done(fn):
+            fn()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _build_external_rec_card(self, ex: dict) -> ft.Container:
+        """建立外部推薦論文卡（含加入文獻庫按鈕）。"""
+        import_btn = ft.Container(
+            content=ft.Text("+ 加入文獻庫", size=10, color="#2563EB"),
+            on_click=lambda e, data=ex, btn=None: None,   # 先佔位，下面用 ref 賦值
+            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+            border_radius=6,
+            border=ft.border.all(1, "#BFDBFE"),
+            bgcolor="#EFF6FF",
+            tooltip="將此論文加入你的文獻庫",
+        )
+        import_btn.on_click = lambda e, data=ex, b=import_btn: self._import_external_paper(data, b)
+
+        abstract_snippet = (ex.get("abstract") or "")[:150]
+        year_str = str(ex.get("year") or "")
+        authors = ex.get("authors") or []
+        author_str = authors[0] + (" et al." if len(authors) > 1 else "") if authors else ""
+
+        return ft.Container(
+            content=ft.Column([
+                ft.Text(ex["title"], size=12, color=TITLE_C,
+                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
+                        weight=ft.FontWeight.W_500),
+                ft.Text(author_str, size=10, color="#475569",
+                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Row([
+                    ft.Text(year_str, size=10, color=META_C),
+                    import_btn,
+                ], spacing=8, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ft.Text(abstract_snippet + ("…" if len(abstract_snippet) == 150 else ""),
+                        size=10, color="#64748B", italic=True,
+                        max_lines=3, overflow=ft.TextOverflow.ELLIPSIS) if abstract_snippet else ft.Container(),
+            ], spacing=3),
+            padding=ft.padding.symmetric(horizontal=10, vertical=8),
+            border_radius=8,
+            bgcolor="#EFF6FF",
+            border=ft.border.all(1, "#BFDBFE"),
+        )
+
+    def _import_external_paper(self, ex: dict, btn: ft.Container):
+        """將外部推薦論文匯入文獻庫（背景執行）。"""
+        if not self._pipeline:
+            return
+        btn.content = ft.Row([
+            ft.ProgressRing(width=10, height=10, stroke_width=2),
+            ft.Text("匯入中…", size=10, color=META_C),
+        ], spacing=4, tight=True)
+        btn.on_click = None
+        self._page.update()
+
+        def _run():
+            try:
+                paper = Paper(
+                    title=ex["title"],
+                    doi=ex.get("doi"),
+                    abstract=ex.get("abstract") or "",
+                    year=ex.get("year"),
+                    authors=ex.get("authors") or [],
+                    source="semantic_scholar" if ex.get("doi") else "arxiv",
+                )
+                paper_id = self._pipeline.sqlite_db.insert(paper)
+                paper.id = paper_id
+                if paper.abstract:
+                    self._pipeline.vector_db.add(
+                        paper_id=paper_id,
+                        abstract=paper.abstract,
+                        metadata={"title": paper.title, "tags": ""},
+                    )
+                success = True
+            except Exception:
+                success = False
+
+            def _done():
+                if success:
+                    btn.content = ft.Row([
+                        ft.Icon("check_circle", size=11, color="#059669"),
+                        ft.Text("已加入", size=10, color="#059669"),
+                    ], spacing=4, tight=True)
+                    btn.bgcolor = "#ECFDF5"
+                    btn.border = ft.border.all(1, "#A7F3D0")
+                else:
+                    btn.content = ft.Text("匯入失敗", size=10, color=RED)
                 self._page.update()
 
             self._page.run_task(_async_done, _done)
