@@ -3,6 +3,7 @@
 提供語義搜尋、BM25 關鍵字搜尋、RRF 混合搜尋
 """
 
+from collections import OrderedDict
 from typing import Optional
 
 from ..database.sqlite_db import SQLiteDB
@@ -10,6 +11,8 @@ from ..database.vector_db import VectorDB
 from ..models import Paper, SearchResult
 from .reranker import Reranker
 from .bm25_index import BM25Index, reciprocal_rank_fusion
+
+_QUERY_CACHE_MAX = 128
 
 
 class SearchService:
@@ -31,6 +34,7 @@ class SearchService:
         self.vector_db = vector_db or VectorDB()
         self.reranker = Reranker()
         self._bm25 = BM25Index()
+        self._query_cache: OrderedDict[tuple, list] = OrderedDict()
 
     def _ensure_bm25(self) -> None:
         """懶載入：第一次搜尋時建立 BM25 索引"""
@@ -39,8 +43,27 @@ class SearchService:
             self._bm25.build(papers)
 
     def invalidate_bm25(self) -> None:
-        """資料庫更新後呼叫此方法讓 BM25 索引失效，下次搜尋自動重建"""
+        """資料庫更新後讓 BM25 索引與 query 快取全部失效"""
         self._bm25 = BM25Index()
+        self._query_cache.clear()
+
+    def invalidate_search_cache(self) -> None:
+        """手動清除 query-level LRU 快取"""
+        self._query_cache.clear()
+
+    def _cache_get(self, key: tuple) -> Optional[list]:
+        if key not in self._query_cache:
+            return None
+        self._query_cache.move_to_end(key)
+        return self._query_cache[key]
+
+    def _cache_put(self, key: tuple, value: list) -> None:
+        if key in self._query_cache:
+            self._query_cache.move_to_end(key)
+        else:
+            if len(self._query_cache) >= _QUERY_CACHE_MAX:
+                self._query_cache.popitem(last=False)
+        self._query_cache[key] = value
 
     def semantic_search(
         self,
@@ -61,15 +84,18 @@ class SearchService:
         Returns:
             SearchResult 清單
         """
-        # 擴大初始搜尋量，讓 re-ranker 有更多候選
         fetch_n = n_results * 3 if use_rerank else n_results
         vector_results = self.vector_db.search(query=query, n_results=fetch_n)
+
+        # 批次查詢，取代 N 次個別 get_by_id
+        ids = [vr["paper_id"] for vr in vector_results if vr["score"] >= min_score]
+        paper_map = self.sqlite_db.get_by_ids(ids)
 
         candidates = []
         for vr in vector_results:
             if vr["score"] < min_score:
                 continue
-            paper = self.sqlite_db.get_by_id(vr["paper_id"])
+            paper = paper_map.get(vr["paper_id"])
             if paper:
                 candidates.append({
                     "paper": paper,
@@ -180,16 +206,24 @@ class SearchService:
         Returns:
             SearchResult 清單
         """
+        # ── Query-level LRU 快取 ───────────────────────────────────────
+        cache_key = ("hybrid", query, n_results, use_rerank)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         # ── 1. 語意搜尋（擴大候選量）
         fetch_n = max(n_results * 3, 30)
         vector_results = self.vector_db.search(query=query, n_results=fetch_n)
-        semantic_list = []
-        paper_cache: dict[int, Paper] = {}
-        for vr in vector_results:
-            paper = self.sqlite_db.get_by_id(vr["paper_id"])
-            if paper:
-                paper_cache[paper.id] = paper
-                semantic_list.append({"paper": paper, "paper_id": paper.id, "score": vr["score"]})
+
+        # 批次查詢論文，取代 N 次個別 get_by_id
+        vec_ids = [vr["paper_id"] for vr in vector_results]
+        paper_cache = self.sqlite_db.get_by_ids(vec_ids)
+        semantic_list = [
+            {"paper": paper_cache[vr["paper_id"]], "paper_id": vr["paper_id"], "score": vr["score"]}
+            for vr in vector_results
+            if vr["paper_id"] in paper_cache
+        ]
 
         # ── 2. BM25 搜尋
         self._ensure_bm25()
@@ -228,11 +262,15 @@ class SearchService:
                     text_key="document",
                     top_k=n_results,
                 )
-                return [SearchResult(paper=c["paper"], score=c["rerank_score"]) for c in reranked]
+                results = [SearchResult(paper=c["paper"], score=c["rerank_score"]) for c in reranked]
+                self._cache_put(cache_key, results)
+                return results
             except Exception as e:
                 print(f"Hybrid re-ranking 失敗: {e}")
 
-        return [SearchResult(paper=f["paper"], score=f["rrf_score"]) for f in fused[:n_results]]
+        results = [SearchResult(paper=f["paper"], score=f["rrf_score"]) for f in fused[:n_results]]
+        self._cache_put(cache_key, results)
+        return results
 
     def find_similar(self, paper_id: int, n_results: int = 5) -> list[SearchResult]:
         """

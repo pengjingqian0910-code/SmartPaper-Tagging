@@ -5,6 +5,8 @@ SQLite 資料庫操作模組
 
 import sqlite3
 import json
+import threading
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -13,19 +15,41 @@ from contextlib import contextmanager
 from ..models import Paper
 from ..config import SQLITE_DB_PATH
 
+_CACHE_MAX = 2000
+
 
 class SQLiteDB:
     """SQLite 資料庫管理類"""
 
     def __init__(self, db_path: Optional[Path] = None):
-        """
-        初始化資料庫連接
-
-        Args:
-            db_path: 資料庫檔案路徑，預設使用配置中的路徑
-        """
         self.db_path = db_path or SQLITE_DB_PATH
+        self._cache: OrderedDict[int, Paper] = OrderedDict()
+        self._cache_lock = threading.Lock()
         self._init_db()
+
+    # ── 記憶體 LRU 快取 ───────────────────────────────────────────────
+
+    def _cache_get(self, paper_id: int) -> Optional[Paper]:
+        with self._cache_lock:
+            if paper_id not in self._cache:
+                return None
+            self._cache.move_to_end(paper_id)
+            return self._cache[paper_id]
+
+    def _cache_put(self, paper: Paper) -> None:
+        if paper.id is None:
+            return
+        with self._cache_lock:
+            if paper.id in self._cache:
+                self._cache.move_to_end(paper.id)
+            else:
+                if len(self._cache) >= _CACHE_MAX:
+                    self._cache.popitem(last=False)
+            self._cache[paper.id] = paper
+
+    def _cache_evict(self, paper_id: int) -> None:
+        with self._cache_lock:
+            self._cache.pop(paper_id, None)
 
     def _init_db(self) -> None:
         """初始化資料庫表格"""
@@ -158,23 +182,48 @@ class SQLiteDB:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid
+            paper_id = cursor.lastrowid
+        paper.id = paper_id
+        self._cache_put(paper)
+        return paper_id
 
     def get_by_id(self, paper_id: int) -> Optional[Paper]:
-        """
-        根據 ID 取得論文
-
-        Args:
-            paper_id: 論文 ID
-
-        Returns:
-            Paper 物件或 None
-        """
+        cached = self._cache_get(paper_id)
+        if cached is not None:
+            return cached
         with self._get_connection() as conn:
             row = conn.execute(
                 "SELECT * FROM papers WHERE id = ?", (paper_id,)
             ).fetchone()
-            return self._row_to_paper(row) if row else None
+        if row:
+            paper = self._row_to_paper(row)
+            self._cache_put(paper)
+            return paper
+        return None
+
+    def get_by_ids(self, ids: list[int]) -> dict[int, Paper]:
+        """批次查詢，先查快取再補 SQL，一次 IN 查詢取回所有未快取論文。"""
+        if not ids:
+            return {}
+        result: dict[int, Paper] = {}
+        missing: list[int] = []
+        for pid in ids:
+            p = self._cache_get(pid)
+            if p is not None:
+                result[pid] = p
+            else:
+                missing.append(pid)
+        if missing:
+            placeholders = ",".join("?" * len(missing))
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    f"SELECT * FROM papers WHERE id IN ({placeholders})", missing
+                ).fetchall()
+            for row in rows:
+                paper = self._row_to_paper(row)
+                self._cache_put(paper)
+                result[paper.id] = paper
+        return result
 
     def get_by_doi(self, doi: str) -> Optional[Paper]:
         """
@@ -297,7 +346,10 @@ class SQLiteDB:
                 ),
             )
             conn.commit()
-            return cursor.rowcount > 0
+        if cursor.rowcount > 0:
+            self._cache_put(paper)
+            return True
+        return False
 
     def delete(self, paper_id: int) -> bool:
         """
@@ -312,7 +364,10 @@ class SQLiteDB:
         with self._get_connection() as conn:
             cursor = conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
             conn.commit()
-            return cursor.rowcount > 0
+        if cursor.rowcount > 0:
+            self._cache_evict(paper_id)
+            return True
+        return False
 
     def count(self) -> int:
         """取得論文總數"""
