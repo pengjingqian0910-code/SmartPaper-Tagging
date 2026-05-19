@@ -10,6 +10,7 @@ from typing import Optional, Callable
 from ..api.crossref import CrossrefAPI
 from ..api.arxiv import ArxivAPI
 from ..api.gemini import GeminiTagger
+from ..api import semantic_scholar as ss_api
 from ..database.sqlite_db import SQLiteDB
 from ..database.vector_db import VectorDB
 from ..models import Paper, ProcessingStatus
@@ -132,6 +133,9 @@ class Pipeline:
                         metadata={"title": paper.title, "tags": ",".join(paper.tags)},
                     )
 
+                # 抓引用關係
+                self._fetch_and_store_citations(paper)
+
                 status.success += 1
 
             except Exception as e:
@@ -231,6 +235,8 @@ class Pipeline:
                         metadata={"title": paper.title, "tags": ",".join(paper.tags)},
                     )
 
+                self._fetch_and_store_citations(paper)
+
                 status.success += 1
 
             except Exception as e:
@@ -304,6 +310,8 @@ class Pipeline:
                 abstract=paper.abstract,
                 metadata={"title": paper.title, "tags": ",".join(paper.tags)},
             )
+
+        self._fetch_and_store_citations(paper)
 
         return paper
 
@@ -468,3 +476,51 @@ class Pipeline:
             "unique_tags": len(all_tags),
             "tags": all_tags[:20],  # 前 20 個標籤
         }
+
+    # ── Citation helpers ──────────────────────────────────────────────────
+
+    def _fetch_and_store_citations(self, paper: Paper) -> int:
+        """抓取並儲存一篇論文的引用關係，回傳成功儲存的筆數。需要有 DOI。"""
+        if not paper.doi or not paper.id:
+            return 0
+        if self.sqlite_db.has_citations(paper.id):
+            return 0  # 已有引用，跳過
+        try:
+            refs = ss_api.fetch_references(paper.doi)
+            count = 0
+            for ref in refs:
+                self.sqlite_db.add_citation(
+                    citing_paper_id=paper.id,
+                    cited_doi=ref.get("doi"),
+                    cited_title=ref.get("title"),
+                )
+                count += 1
+            if count:
+                self.sqlite_db.resolve_citation_paper_ids()
+            return count
+        except Exception as e:
+            print(f"[Citation] {paper.title[:40]} 引用抓取失敗: {e}")
+            return 0
+
+    def fetch_citations_for_paper(self, paper_id: int) -> int:
+        """手動補抓指定論文的引用關係，供 UI 呼叫。回傳儲存筆數。"""
+        paper = self.sqlite_db.get_by_id(paper_id)
+        if not paper:
+            return 0
+        return self._fetch_and_store_citations(paper)
+
+    def fetch_citations_for_all(
+        self,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> int:
+        """批次補抓所有有 DOI 但尚無引用記錄的論文，供 UI 批次補齊使用。"""
+        papers = self.sqlite_db.get_all(limit=5000)
+        todo = [p for p in papers if p.doi and not self.sqlite_db.has_citations(p.id)]
+        total = len(todo)
+        done = 0
+        for paper in todo:
+            self._fetch_and_store_citations(paper)
+            done += 1
+            if progress_callback:
+                progress_callback(done, total)
+        return done

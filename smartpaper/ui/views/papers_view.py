@@ -68,17 +68,22 @@ def _tag_chip(text: str, on_remove=None) -> ft.Container:
 
 class _Card:
     def __init__(self, paper: Paper, on_delete, on_tag_remove, page: ft.Page,
-                 has_fulltext: bool = False, on_read_fulltext=None):
+                 has_fulltext: bool = False, on_read_fulltext=None,
+                 search_service=None, pipeline=None):
         self.paper = paper
         self._page = page
         self._on_delete = on_delete
         self._on_tag_remove = on_tag_remove
         self._has_fulltext = has_fulltext
         self._on_read_fulltext = on_read_fulltext
+        self._search_service = search_service
+        self._pipeline = pipeline
         self._expanded = False
         self._tag_row: Optional[ft.Row] = None
         self._detail_col: Optional[ft.Column] = None
         self._container: Optional[ft.Container] = None
+        self._similar_col: Optional[ft.Column] = None
+        self._cite_btn: Optional[ft.Container] = None
 
     def _build_tag_row(self) -> ft.Row:
         return ft.Row([
@@ -117,6 +122,39 @@ class _Card:
 
         # 摘要 + DOI（預設隱藏）
         abst = (p.abstract or "")[:600] + ("…" if p.abstract and len(p.abstract) > 600 else "")
+
+        # 相似論文區塊
+        self._similar_col = ft.Column([], spacing=4, visible=False)
+
+        # 抓取引用按鈕
+        self._cite_btn = ft.Container(
+            content=ft.Row([
+                ft.Icon("link", size=12, color="#7C3AED"),
+                ft.Text("補抓引用關係", size=11, color="#7C3AED"),
+            ], spacing=4, tight=True),
+            on_click=self._on_fetch_citations,
+            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+            border_radius=6,
+            border=ft.border.all(1, "#DDD6FE"),
+            bgcolor="#F5F3FF",
+            tooltip="透過 Semantic Scholar 補抓此論文的引用關係",
+            visible=bool(p.doi),
+        )
+
+        # 相似論文按鈕
+        sim_btn = ft.Container(
+            content=ft.Row([
+                ft.Icon("recommend", size=12, color="#059669"),
+                ft.Text("推薦相似論文", size=11, color="#059669"),
+            ], spacing=4, tight=True),
+            on_click=self._on_find_similar,
+            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+            border_radius=6,
+            border=ft.border.all(1, "#A7F3D0"),
+            bgcolor="#ECFDF5",
+            tooltip="依摘要語意搜尋相似論文",
+        )
+
         self._detail_col = ft.Column([
             ft.Container(height=4),
             ft.Container(
@@ -130,6 +168,8 @@ class _Card:
                 f"DOI: {p.doi}" if p.doi else "",
                 size=10, color="#3B82F6", selectable=True,
             ),
+            ft.Row([sim_btn, self._cite_btn], spacing=8),
+            self._similar_col,
         ], spacing=6, visible=False)
 
         # 刪除按鈕
@@ -206,6 +246,98 @@ class _Card:
                                 color="#08000000", offset=ft.Offset(0, 1)),
         )
         return self._container
+
+    def _on_find_similar(self, e):
+        if not self._search_service:
+            return
+        self._similar_col.controls = [
+            ft.Row([
+                ft.ProgressRing(width=14, height=14, stroke_width=2),
+                ft.Text("搜尋相似論文中…", size=11, color=META_C),
+            ], spacing=6)
+        ]
+        self._similar_col.visible = True
+        self._page.update()
+
+        def _run():
+            try:
+                results = self._search_service.find_similar(self.paper.id, n_results=4)
+            except Exception:
+                results = []
+
+            def _done():
+                if not results:
+                    self._similar_col.controls = [
+                        ft.Text("找不到相似論文", size=11, color=META_C)
+                    ]
+                else:
+                    items = [
+                        ft.Text("相似論文推薦", size=11, weight=ft.FontWeight.W_600,
+                                color="#059669"),
+                    ]
+                    for sr in results:
+                        rp = sr.paper
+                        score_pct = int(sr.score * 100) if sr.score <= 1 else int(sr.score)
+                        items.append(ft.Container(
+                            content=ft.Column([
+                                ft.Text(rp.title, size=12, color=TITLE_C,
+                                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
+                                        weight=ft.FontWeight.W_500),
+                                ft.Row([
+                                    ft.Text(f"相似度 {score_pct}%", size=10, color="#059669"),
+                                    ft.Text(str(rp.year or ""), size=10, color=META_C),
+                                    *[_chip(t, TAG_BG, TAG_C, 9) for t in (rp.tags or [])[:2]],
+                                ], spacing=6),
+                            ], spacing=2),
+                            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                            border_radius=8,
+                            bgcolor="#F0FDF4",
+                            border=ft.border.all(1, "#BBF7D0"),
+                        ))
+                    self._similar_col.controls = items
+                self._page.update()
+
+            self._page.run_task(_async_done, _done)
+
+        async def _async_done(fn):
+            fn()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_fetch_citations(self, e):
+        if not self._pipeline:
+            return
+        self._cite_btn.content = ft.Row([
+            ft.ProgressRing(width=12, height=12, stroke_width=2),
+            ft.Text("抓取中…", size=11, color="#7C3AED"),
+        ], spacing=4, tight=True)
+        self._cite_btn.on_click = None
+        self._page.update()
+
+        def _run():
+            count = self._pipeline.fetch_citations_for_paper(self.paper.id)
+
+            def _done():
+                if count > 0:
+                    self._cite_btn.content = ft.Row([
+                        ft.Icon("check_circle", size=12, color="#059669"),
+                        ft.Text(f"已儲存 {count} 筆引用", size=11, color="#059669"),
+                    ], spacing=4, tight=True)
+                    self._cite_btn.bgcolor = "#ECFDF5"
+                    self._cite_btn.border = ft.border.all(1, "#A7F3D0")
+                else:
+                    self._cite_btn.content = ft.Row([
+                        ft.Icon("info_outline", size=12, color=META_C),
+                        ft.Text("無引用資料（需有 DOI）", size=11, color=META_C),
+                    ], spacing=4, tight=True)
+                self._page.update()
+
+            self._page.run_task(_async_done, _done)
+
+        async def _async_done(fn):
+            fn()
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _toggle(self, e):
         self._expanded = not self._expanded
@@ -424,6 +556,8 @@ class PapersView:
                 p, self._on_delete, self._on_tag_remove, self.page,
                 has_fulltext=(p.id in self._fulltext_ids),
                 on_read_fulltext=self._on_read_fulltext,
+                search_service=self.search_service,
+                pipeline=self.pipeline,
             ).build()
             for p in page_papers
         ]

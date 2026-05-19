@@ -9,6 +9,7 @@ import flet as ft
 from typing import Optional
 
 from ...services.qa_service import QAService, ChatMessage, QAResult, SourceChunk
+from ...services.qa_service_fc import FunctionCallingQAService
 from ...services.pdf_ingestion import PDFIngestionService
 from ...services.pdf_import_service import PDFImportService, ExtractedMeta
 from ...database.sqlite_db import SQLiteDB
@@ -99,6 +100,8 @@ class QAView:
     def __init__(self, page: ft.Page):
         self.page = page
         self._qa_service: Optional[QAService] = None
+        self._fc_service: Optional[FunctionCallingQAService] = None
+        self._use_fc: bool = False          # Function Calling 模式開關
         self._ingestor: Optional[PDFIngestionService] = None
         self._sqlite = SQLiteDB()
         self._history: list[ChatMessage] = []
@@ -142,6 +145,23 @@ class QAView:
         except Exception:
             return None
         return self._qa_service
+
+    def _get_fc_service(self) -> Optional[FunctionCallingQAService]:
+        if self._fc_service:
+            return self._fc_service
+        if not GEMINI_API_KEY:
+            return None
+        try:
+            self._fc_service = FunctionCallingQAService()
+        except Exception:
+            return None
+        return self._fc_service
+
+    def _get_active_service(self):
+        """回傳當前啟用的 QA 服務（Classic RAG 或 Function Calling）。"""
+        if self._use_fc:
+            return self._get_fc_service()
+        return self._get_qa_service()
 
     def _get_ingestor(self) -> PDFIngestionService:
         if not self._ingestor:
@@ -217,14 +237,25 @@ class QAView:
             padding=ft.padding.only(right=10, top=2),
         )
 
+        self._fc_switch = ft.Switch(
+            label="Function Calling 模式",
+            value=False,
+            active_color="#7C3AED",
+            label_style=ft.TextStyle(size=11, color="#7C3AED"),
+            on_change=self._on_fc_toggle,
+            tooltip="啟用後由 Gemini 自主決定要搜尋什麼、讀取哪些論文（更靈活但較慢）",
+        )
+
         return ft.Column([
             ft.Row([
                 ft.Column([
                     ft.Text("問論文", size=22, weight=ft.FontWeight.BOLD),
                     ft.Text("根據論文庫回答問題，有全文的論文提供章節級引用",
                             size=11, color=ft.colors.GREY_600),
-                ], spacing=2),
-            ]),
+                ], spacing=2, expand=True),
+                self._fc_switch,
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+               vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Divider(height=1, color=COLOR_BORDER),
             ft.Row([left_col, right_col], expand=True, spacing=0,
                    vertical_alignment=ft.CrossAxisAlignment.START),
@@ -847,6 +878,12 @@ class QAView:
         if e is not None:
             self.page.update()
 
+    def _on_fc_toggle(self, e):
+        self._use_fc = e.control.value
+        mode = "Function Calling" if self._use_fc else "Classic RAG"
+        self._fc_switch.label = f"{mode} 模式"
+        self._fc_switch.update()
+
     def _on_send(self, e):
         if self._loading:
             return
@@ -854,7 +891,7 @@ class QAView:
         if not question:
             return
 
-        service = self._get_qa_service()
+        service = self._get_active_service()
         if not service:
             self._append_error("未設定 GEMINI_API_KEY，無法使用問答功能。")
             return
