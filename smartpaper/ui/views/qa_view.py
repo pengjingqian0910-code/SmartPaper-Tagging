@@ -15,6 +15,8 @@ from ...database.sqlite_db import SQLiteDB
 from ...config import GEMINI_API_KEY
 
 
+MAX_SESSIONS = 5
+
 COLOR_USER_BG       = "#E3F2FD"
 COLOR_ASST_BG       = "#F3E5F5"
 COLOR_SOURCE_BG     = "#FAFAFA"
@@ -114,6 +116,11 @@ class QAView:
         self._queue_col: Optional[ft.Column] = None
         self._importer: Optional[PDFImportService] = None
         self._last_result: Optional[QAResult] = None
+        # Session 管理
+        self._sessions: list[dict] = []
+        self._current_session_idx: int = 0
+        self._session_counter: int = 0
+        self._session_bar: Optional[ft.Row] = None
         # PDF 管理面板 折疊狀態
         self._pdf_mgmt_visible = False
         self._pdf_mgmt_content: Optional[ft.Column] = None
@@ -150,6 +157,12 @@ class QAView:
 
     def build(self) -> ft.Control:
         self._history = []
+        # 初始化第一個 session
+        self._session_counter = 0
+        self._sessions = []
+        self._current_session_idx = 0
+        first = self._new_session_data()
+        self._sessions.append(first)
 
         # 建立並註冊 FilePicker（各功能重用同一個，不重複加到 overlay）
         self._multi_picker = ft.FilePicker()
@@ -178,7 +191,10 @@ class QAView:
             text="清除對話", icon="delete_outline", on_click=self._on_clear,
         )
 
+        self._session_bar = self._build_session_bar()
+
         right_col = ft.Column([
+            self._session_bar,
             ft.Container(
                 content=self._chat_column,
                 expand=True,
@@ -189,7 +205,7 @@ class QAView:
             ft.Container(height=6),
             ft.Row([self._input, self._send_btn, clear_btn],
                    vertical_alignment=ft.CrossAxisAlignment.END),
-        ], expand=True, spacing=0)
+        ], expand=True, spacing=4)
 
         # ── 左側：側邊欄 ─────────────────────────────────────────────
         left_col = ft.Container(
@@ -674,17 +690,162 @@ class QAView:
             self.page.update()
         threading.Thread(target=run, daemon=True).start()
 
+    # ── Session 管理 ──────────────────────────────────────────────────────
+
+    def _new_session_data(self) -> dict:
+        self._session_counter += 1
+        return {
+            "id": self._session_counter,
+            "title": f"對話 {self._session_counter}",
+            "history": [],
+            "messages": [],   # list of {type, ...} for re-rendering
+            "source_paper_ids": None,
+            "last_result": None,
+        }
+
+    def _build_session_bar(self) -> ft.Row:
+        tabs = [self._build_session_tab(i, s) for i, s in enumerate(self._sessions)]
+        new_btn = ft.IconButton(
+            icon="add_circle_outline",
+            tooltip=f"新對話（最多 {MAX_SESSIONS} 個）",
+            icon_color="#1D4ED8", icon_size=18,
+            on_click=self._on_new_session,
+        )
+        return ft.Row(
+            tabs + [new_btn],
+            spacing=4, scroll=ft.ScrollMode.AUTO,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _build_session_tab(self, idx: int, session: dict) -> ft.Container:
+        is_active = (idx == self._current_session_idx)
+        return ft.Container(
+            content=ft.Row([
+                ft.Text(
+                    session["title"][:22] + ("…" if len(session["title"]) > 22 else ""),
+                    size=12,
+                    color="#1D4ED8" if is_active else "#64748B",
+                    weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
+                ),
+                ft.IconButton(
+                    icon="close", icon_size=13,
+                    icon_color="#94A3B8",
+                    tooltip="刪除此對話",
+                    on_click=lambda e, i=idx: self._delete_session(i),
+                    style=ft.ButtonStyle(
+                        padding=ft.padding.all(0),
+                    ),
+                ),
+            ], spacing=0, tight=True,
+               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor="#DBEAFE" if is_active else "#F8FAFC",
+            border=ft.border.all(1, "#3B82F6" if is_active else "#E2E8F0"),
+            border_radius=6,
+            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+            on_click=lambda e, i=idx: self._switch_session(i),
+            ink=not is_active,
+        )
+
+    def _rebuild_session_bar(self):
+        if self._session_bar is None:
+            return
+        tabs = [self._build_session_tab(i, s) for i, s in enumerate(self._sessions)]
+        new_btn = ft.IconButton(
+            icon="add_circle_outline",
+            tooltip=f"新對話（最多 {MAX_SESSIONS} 個）",
+            icon_color="#1D4ED8", icon_size=18,
+            on_click=self._on_new_session,
+        )
+        self._session_bar.controls = tabs + [new_btn]
+
+    def _save_current_session(self):
+        if not self._sessions:
+            return
+        s = self._sessions[self._current_session_idx]
+        s["history"] = list(self._history)
+        s["source_paper_ids"] = self._source_paper_ids
+        s["last_result"] = self._last_result
+
+    def _restore_session(self, session: dict):
+        """清空聊天欄並從 session 紀錄重新渲染。"""
+        self._chat_column.controls.clear()
+        if not session["messages"]:
+            self._chat_column.controls.append(self._welcome_card())
+            return
+        for msg in session["messages"]:
+            if msg["type"] == "user":
+                self._append_user_msg(msg["text"], _update=False)
+            elif msg["type"] == "assistant":
+                self._append_assistant_msg(msg["result"])
+            elif msg["type"] == "chips":
+                self._append_followup_chips(msg["suggestions"])
+
+    def _switch_session(self, idx: int):
+        if idx == self._current_session_idx:
+            return
+        self._save_current_session()
+        self._current_session_idx = idx
+        session = self._sessions[idx]
+        self._history = session["history"]
+        self._source_paper_ids = session["source_paper_ids"]
+        self._last_result = session["last_result"]
+        self._restore_session(session)
+        self._on_source_changed()
+        self._rebuild_session_bar()
+        self.page.update()
+
+    def _on_new_session(self, e):
+        if len(self._sessions) >= MAX_SESSIONS:
+            self._append_error(
+                f"最多保留 {MAX_SESSIONS} 個對話，請先刪除不需要的對話。"
+            )
+            return
+        self._save_current_session()
+        new_s = self._new_session_data()
+        self._sessions.append(new_s)
+        self._current_session_idx = len(self._sessions) - 1
+        self._history = new_s["history"]
+        self._source_paper_ids = None
+        self._last_result = None
+        self._restore_session(new_s)
+        self._rebuild_session_bar()
+        self.page.update()
+
+    def _delete_session(self, idx: int):
+        if len(self._sessions) == 1:
+            # 最後一個 session：只清空，不刪除
+            self._on_clear(None)
+            return
+        self._sessions.pop(idx)
+        new_idx = max(0, min(self._current_session_idx, len(self._sessions) - 1))
+        if idx < self._current_session_idx:
+            new_idx = self._current_session_idx - 1
+        self._current_session_idx = new_idx
+        session = self._sessions[new_idx]
+        self._history = session["history"]
+        self._source_paper_ids = session["source_paper_ids"]
+        self._last_result = session["last_result"]
+        self._restore_session(session)
+        self._on_source_changed()
+        self._rebuild_session_bar()
+        self.page.update()
+
     # ── 聊天事件 ──────────────────────────────────────────────────────────
 
     def _on_clear(self, e):
-        self._history.clear()
+        session = self._sessions[self._current_session_idx]
+        session["history"].clear()
+        session["messages"].clear()
+        session["last_result"] = None
+        self._history = session["history"]
         self._last_result = None
         svc = self._get_qa_service()
         if svc:
             svc.memory.clear()
         self._chat_column.controls.clear()
         self._chat_column.controls.append(self._welcome_card())
-        self.page.update()
+        if e is not None:
+            self.page.update()
 
     def _on_send(self, e):
         if self._loading:
@@ -704,6 +865,15 @@ class QAView:
         self._input.value = ""
         self._input.update()
         self._append_user_msg(question)
+
+        # 儲存到 session，第一條問題自動命名 session
+        session = self._sessions[self._current_session_idx]
+        is_first_msg = len(session["messages"]) == 0
+        session["messages"].append({"type": "user", "text": question})
+        if is_first_msg:
+            session["title"] = question[:22] + ("…" if len(question) > 22 else "")
+            self._rebuild_session_bar()
+            self._session_bar.update()
 
         loading_ctrl = self._loading_bubble()
         self._chat_column.controls.append(loading_ctrl)
@@ -735,6 +905,10 @@ class QAView:
 
             self._chat_column.controls.remove(loading_ctrl)
             self._append_assistant_msg(result)
+            self._sessions[self._current_session_idx]["messages"].append(
+                {"type": "assistant", "result": result}
+            )
+            self._sessions[self._current_session_idx]["last_result"] = result
             self._set_loading(False)
             self._chat_column.update()
 
@@ -745,6 +919,9 @@ class QAView:
                     suggestions = service.suggest_followups(question, captured_answer)
                     if suggestions and not self._loading:
                         self._append_followup_chips(suggestions)
+                        self._sessions[self._current_session_idx]["messages"].append(
+                            {"type": "chips", "suggestions": suggestions}
+                        )
                         self._chat_column.update()
                 except Exception:
                     pass
@@ -773,7 +950,7 @@ class QAView:
             bgcolor="#E8F4FD", border_radius=8, padding=16,
         )
 
-    def _append_user_msg(self, text: str):
+    def _append_user_msg(self, text: str, _update: bool = True):
         self._chat_column.controls.append(
             ft.Container(
                 content=ft.Column([
@@ -787,7 +964,8 @@ class QAView:
                 bgcolor=COLOR_USER_BG, border_radius=8, padding=12,
             )
         )
-        self._chat_column.update()
+        if _update:
+            self._chat_column.update()
 
     def _append_assistant_msg(self, result: QAResult):
         source_controls = self._build_source_controls(result.source_chunks)
