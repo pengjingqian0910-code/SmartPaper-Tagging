@@ -29,18 +29,20 @@ MAX_TOOL_ROUNDS = 6
 MAX_CHUNK_CHARS = 600
 MAX_ABSTRACT_CHARS = 500
 
-_SYSTEM = (
+_SYSTEM_BASE = (
     "你是一位專業的學術研究助理，使用繁體中文回答。\n"
-    "你有以下工具可以查詢本地論文庫：\n"
+    "你有以下工具可以查詢論文庫：\n"
+    "  • list_available_papers：列出本次可查詢的論文清單（**請優先呼叫此工具**）\n"
     "  • search_papers：依問題語義搜尋最相關論文\n"
     "  • get_paper_abstract：取得某篇論文的完整摘要\n"
     "  • get_paper_chunks：取得某篇論文的全文段落（需 PDF 已匯入）\n"
     "  • list_papers_by_tag：依標籤篩選論文\n\n"
     "回答規則：\n"
-    "1. 先呼叫適當工具取得資料，再給出完整答案\n"
-    "2. 在回答中用 [論文編號] 標注引用來源\n"
-    "3. 語氣學術但易於理解，使用繁體中文\n"
-    "4. 若工具回傳無結果，請告知用戶並建議補充相關論文\n"
+    "1. 先呼叫 list_available_papers 或 search_papers 取得資料，再給出完整答案\n"
+    "2. 只能引用工具回傳的論文，不可臆測或引用未查詢到的論文\n"
+    "3. 在回答中用 [論文編號] 標注引用來源\n"
+    "4. 語氣學術但易於理解，使用繁體中文\n"
+    "5. 若工具回傳無結果，請告知用戶\n"
 )
 
 # ── 顯式工具宣告（Gemini FunctionDeclaration 格式）────────────────────────
@@ -49,8 +51,22 @@ def _build_tool() -> types.Tool:
     """建立 Gemini Tool，包含所有工具的 FunctionDeclaration。"""
     return types.Tool(function_declarations=[
         types.FunctionDeclaration(
+            name="list_available_papers",
+            description=(
+                "List all papers available for this QA session. "
+                "Call this FIRST to know which papers you can access and their IDs."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={},
+            ),
+        ),
+        types.FunctionDeclaration(
             name="search_papers",
-            description="Search the local academic paper database by semantic similarity to the query.",
+            description=(
+                "Search available papers by semantic similarity to the query. "
+                "Only returns papers within the current session scope."
+            ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
@@ -69,7 +85,7 @@ def _build_tool() -> types.Tool:
                 type=types.Type.OBJECT,
                 properties={
                     "paper_id": types.Schema(type=types.Type.INTEGER,
-                                             description="Integer ID obtained from search_papers"),
+                                             description="Integer ID obtained from list_available_papers or search_papers"),
                 },
                 required=["paper_id"],
             ),
@@ -90,7 +106,7 @@ def _build_tool() -> types.Tool:
         ),
         types.FunctionDeclaration(
             name="list_papers_by_tag",
-            description="List papers that have a specific tag label.",
+            description="List available papers that have a specific tag label.",
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
@@ -122,9 +138,10 @@ class FunctionCallingQAService:
         self.skill = ConversationSkill()
         self._tool = _build_tool()
 
-        # 本次 ask() 的追蹤狀態
+        # 本次 ask() 的執行期狀態（每次 ask 重置）
         self._retrieved_papers: dict[int, Paper] = {}
         self._retrieved_chunks: list[SourceChunk] = []
+        self._filter_ids: Optional[set[int]] = None   # 來源過濾（None = 全庫）
         self._lock = threading.Lock()
 
     # ── 工具執行層（由 _run_fc_loop 呼叫）──────────────────────────────────
@@ -132,7 +149,9 @@ class FunctionCallingQAService:
     def _execute_tool(self, name: str, args: dict) -> str:
         """根據工具名稱執行對應方法，回傳 JSON 字串。"""
         try:
-            if name == "search_papers":
+            if name == "list_available_papers":
+                return self._tool_list_available_papers()
+            elif name == "search_papers":
                 return self._tool_search_papers(
                     query=str(args.get("query", "")),
                     n_results=int(args.get("n_results", 5)),
@@ -151,12 +170,34 @@ class FunctionCallingQAService:
         except Exception as ex:
             return json.dumps({"error": str(ex)})
 
+    def _allowed(self, paper_id: int) -> bool:
+        """檢查 paper_id 是否在本次允許的來源範圍內。"""
+        return self._filter_ids is None or paper_id in self._filter_ids
+
+    def _tool_list_available_papers(self) -> str:
+        """回傳本次 session 可查詢的論文清單（filter 內，或全庫）。"""
+        if self._filter_ids is not None:
+            papers = [self.sqlite_db.get_by_id(pid) for pid in self._filter_ids]
+            papers = [p for p in papers if p]
+        else:
+            papers = self.sqlite_db.get_all(limit=200)
+        out = [
+            {"id": p.id, "title": p.title, "year": p.year,
+             "tags": p.tags or [], "has_abstract": bool(p.abstract)}
+            for p in papers
+        ]
+        return json.dumps(out, ensure_ascii=False)
+
     def _tool_search_papers(self, query: str, n_results: int = 5) -> str:
         n = min(n_results, 10)
-        results = self.search.hybrid_search(query, n_results=n, use_rerank=True)
+        # 搜尋時多取一些，以便過濾後仍有足夠結果
+        fetch_n = n * 3 if self._filter_ids else n
+        results = self.search.hybrid_search(query, n_results=fetch_n, use_rerank=True)
         out = []
         for sr in results:
             p = sr.paper
+            if not self._allowed(p.id):
+                continue
             with self._lock:
                 self._retrieved_papers[p.id] = p
             out.append({
@@ -166,9 +207,13 @@ class FunctionCallingQAService:
                 "tags": p.tags or [],
                 "abstract_snippet": (p.abstract or "")[:200],
             })
+            if len(out) >= n:
+                break
         return json.dumps(out, ensure_ascii=False)
 
     def _tool_get_paper_abstract(self, paper_id: int) -> str:
+        if not self._allowed(paper_id):
+            return json.dumps({"error": f"Paper {paper_id} is not in the current session scope."})
         paper = self.sqlite_db.get_by_id(paper_id)
         if not paper:
             return json.dumps({"error": f"Paper {paper_id} not found"})
@@ -187,6 +232,8 @@ class FunctionCallingQAService:
         }, ensure_ascii=False)
 
     def _tool_get_paper_chunks(self, paper_id: int, section_filter: str = "") -> str:
+        if not self._allowed(paper_id):
+            return json.dumps({"error": f"Paper {paper_id} is not in the current session scope."})
         paper = self.sqlite_db.get_by_id(paper_id)
         if not paper:
             return json.dumps({"error": f"Paper {paper_id} not found"})
@@ -213,6 +260,8 @@ class FunctionCallingQAService:
 
     def _tool_list_papers_by_tag(self, tag: str) -> str:
         papers = self.sqlite_db.get_by_tag(tag)
+        # 也要過濾來源
+        papers = [p for p in papers if self._allowed(p.id)]
         return json.dumps(
             [{"id": p.id, "title": p.title, "year": p.year} for p in papers[:20]],
             ensure_ascii=False,
@@ -234,10 +283,11 @@ class FunctionCallingQAService:
         with self._lock:
             self._retrieved_papers = {}
             self._retrieved_chunks = []
+            self._filter_ids = filter_paper_ids  # 設定本次來源過濾
 
         top_memories = self.memory.get_top_k(query=question, k=TOP_K_INJECT)
         memory_text = self.memory.to_prompt(top_memories) if top_memories else ""
-        system = _SYSTEM + (f"\n\n【對話記憶】\n{memory_text}" if memory_text else "")
+        system = self._build_system(filter_paper_ids, memory_text)
 
         contents = self._build_contents(question, history)
         answer = self._run_fc_loop(contents, system)
@@ -282,6 +332,26 @@ class FunctionCallingQAService:
             return []
 
     # ── 內部方法 ─────────────────────────────────────────────────────────
+
+    def _build_system(self, filter_ids: Optional[set[int]], memory_text: str) -> str:
+        system = _SYSTEM_BASE
+        if filter_ids:
+            papers = [self.sqlite_db.get_by_id(pid) for pid in filter_ids]
+            papers = [p for p in papers if p]
+            paper_list = "\n".join(
+                f"  [{p.id}] {p.title}" + (f" ({p.year})" if p.year else "")
+                for p in papers
+            )
+            system += (
+                f"\n【本次來源範圍】\n"
+                f"你只能查詢以下 {len(papers)} 篇論文，不得引用範圍外的資料：\n"
+                f"{paper_list}\n"
+            )
+        else:
+            system += "\n【本次來源範圍】全部論文庫（呼叫 list_available_papers 可取得清單）\n"
+        if memory_text:
+            system += f"\n【對話記憶】\n{memory_text}"
+        return system
 
     def _build_contents(self, question: str, history: list[ChatMessage]) -> list:
         contents = []
