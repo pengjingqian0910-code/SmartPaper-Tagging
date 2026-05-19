@@ -88,6 +88,74 @@ class ArxivAPI:
 
         return None
 
+    def search_by_keywords(
+        self,
+        query: str,
+        n_results: int = 5,
+        timeout: int = 15,
+    ) -> list[dict]:
+        """
+        以關鍵字搜尋 arXiv（標題 OR 摘要）。
+
+        Returns:
+            list of {title, abstract, arxiv_id, year, url, authors}
+        """
+        params = {
+            "search_query": f"ti:{query} OR abs:{query}",
+            "max_results": n_results,
+            "sortBy": "relevance",
+        }
+        try:
+            resp = self.session.get(ARXIV_API_URL, params=params, timeout=timeout)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"[arXiv] 關鍵字搜尋失敗：{e}")
+            return []
+
+        try:
+            root = ET.fromstring(resp.text)
+        except ET.ParseError as e:
+            print(f"[arXiv] XML 解析失敗：{e}")
+            return []
+
+        results = []
+        for entry in root.findall("atom:entry", _NS):
+            title_el   = entry.find("atom:title", _NS)
+            summary_el = entry.find("atom:summary", _NS)
+            id_el      = entry.find("atom:id", _NS)
+            pub_el     = entry.find("atom:published", _NS)
+
+            if title_el is None or summary_el is None or id_el is None:
+                continue
+
+            raw_id   = (id_el.text or "").strip()
+            arxiv_id = raw_id.split("/abs/")[-1] if "/abs/" in raw_id else raw_id
+            title    = " ".join((title_el.text or "").split())
+            abstract = " ".join((summary_el.text or "").split())
+            year     = None
+            if pub_el is not None and pub_el.text:
+                try:
+                    year = int(pub_el.text[:4])
+                except ValueError:
+                    pass
+
+            authors = [
+                (a.find("atom:name", _NS).text or "").strip()
+                for a in entry.findall("atom:author", _NS)
+                if a.find("atom:name", _NS) is not None
+            ]
+
+            results.append({
+                "title":     title,
+                "abstract":  abstract,
+                "arxiv_id":  arxiv_id,
+                "year":      year,
+                "url":       f"https://arxiv.org/abs/{arxiv_id}",
+                "authors":   authors,
+            })
+
+        return results
+
     def _parse_best_match(self, xml_text: str, original_title: str) -> Optional[dict]:
         """從 Atom XML 結果中找出最佳匹配的論文"""
         root = ET.fromstring(xml_text)

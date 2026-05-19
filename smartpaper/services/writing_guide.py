@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable
 from google import genai
 
+from ..api.arxiv import ArxivAPI
 from ..database.sqlite_db import SQLiteDB
 from ..database.vector_db import VectorDB
 from ..config import GEMINI_API_KEY, GEMINI_MODEL
@@ -53,6 +54,7 @@ class ConceptGap:
     suggested_section: str   # 建議補充到哪個段落
     paper: Optional[Paper]   # 文獻庫中找到的對應論文（可能為 None）
     writing_example: str = ""  # 具體寫作範例句
+    external_suggestions: list[dict] = field(default_factory=list)  # arXiv 外部論文建議
 
 
 @dataclass
@@ -411,6 +413,20 @@ class WritingGuideService:
                 "paper":             paper,
             })
 
+        # ── arXiv 外部搜尋：為沒有本地論文的缺口抓外部建議 ─────────────
+        no_paper_gaps = [cp for cp in concept_paper_pairs if cp["paper"] is None]
+        if no_paper_gaps:
+            prog(f"Step 3-2b：arXiv 搜尋外部論文（{len(no_paper_gaps)} 個缺口）...")
+            arxiv_api = ArxivAPI()
+            for cp in no_paper_gaps:
+                query = f"{cp['concept']} {cp['reason']}"
+                cp["external_suggestions"] = arxiv_api.search_by_keywords(
+                    query, n_results=3
+                )
+        for cp in concept_paper_pairs:
+            if "external_suggestions" not in cp:
+                cp["external_suggestions"] = []
+
         # ── Call 2：生成具體寫作範例 ───────────────────────────────────
         prog("Step 3-3：AI 生成寫作範例...")
         pairs_text = ""
@@ -483,6 +499,7 @@ class WritingGuideService:
                 suggested_section=cp["suggested_section"],
                 paper=cp["paper"],
                 writing_example=writing_example,
+                external_suggestions=cp.get("external_suggestions", []),
             ))
 
         prog("Step 3 完成")

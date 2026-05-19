@@ -8,6 +8,9 @@ import threading
 import flet as ft
 from typing import Optional
 
+from ...database.sqlite_db import SQLiteDB
+from ...database.vector_db import VectorDB
+from ...models import Paper
 from ...services.writing_guide import (
     WritingGuideService, SectionGuide, OutlineEnrichment,
 )
@@ -41,6 +44,8 @@ class WritingGuideView:
         self._section_candidates: dict[str, list[dict]] = {}
         self._candidate_checks: dict[str, dict[int, ft.Checkbox]] = {}
         self._enrichment_result: Optional[OutlineEnrichment] = None
+        self._sqlite_db = SQLiteDB()
+        self._vector_db = VectorDB()
 
     def build(self) -> ft.Control:
         # ── 左側：輸入區 ────────────────────────────────────────────────
@@ -576,6 +581,73 @@ class WritingGuideView:
                     ], spacing=6),
                 )
 
+            # ── arXiv 外部建議區 ────────────────────────────────────────
+            external_ctrl = ft.Container()
+            if gap.external_suggestions:
+                ext_rows = []
+                for ext in gap.external_suggestions:
+                    ext_title = ext.get("title", "")
+                    ext_year  = ext.get("year") or ""
+                    ext_url   = ext.get("url", "")
+                    ext_abs   = ext.get("abstract", "")
+                    ext_authors = ext.get("authors", [])
+
+                    def _make_import_handler(e_ext=ext):
+                        def _import(e):
+                            self._import_arxiv_paper(e_ext, e.control)
+                        return _import
+
+                    ext_rows.append(ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Icon("open_in_new", size=12, color="#2563EB"),
+                                ft.Text(
+                                    ext_title[:70] + ("…" if len(ext_title) > 70 else ""),
+                                    size=12, weight=ft.FontWeight.W_500,
+                                    color="#1D4ED8", expand=True,
+                                    tooltip=ext_url,
+                                ),
+                                ft.Text(str(ext_year), size=10, color=_C_META),
+                            ], spacing=6),
+                            ft.Text(
+                                (", ".join(ext_authors[:2]) + (" 等" if len(ext_authors) > 2 else ""))
+                                if ext_authors else "",
+                                size=10, color=_C_META,
+                            ),
+                            ft.Row([
+                                ft.Text(
+                                    (ext_abs[:120] + "…") if len(ext_abs) > 120 else ext_abs,
+                                    size=11, color="#374151", expand=True,
+                                ),
+                                ft.TextButton(
+                                    "加入文獻庫",
+                                    icon="add_circle_outline",
+                                    on_click=_make_import_handler(),
+                                    style=ft.ButtonStyle(
+                                        color="#7C3AED",
+                                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                                    ),
+                                ),
+                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
+                        ], spacing=4),
+                        bgcolor="#F5F3FF",
+                        border=ft.border.all(1, "#DDD6FE"),
+                        border_radius=6,
+                        padding=ft.padding.symmetric(horizontal=10, vertical=8),
+                    ))
+
+                external_ctrl = ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Icon("travel_explore", size=13, color="#7C3AED"),
+                            ft.Text("arXiv 外部論文建議", size=11,
+                                    weight=ft.FontWeight.W_600, color="#5B21B6"),
+                            _chip(f"{len(gap.external_suggestions)} 篇", "#7C3AED"),
+                        ], spacing=6),
+                        *ext_rows,
+                    ], spacing=6),
+                )
+
             gap_tiles.append(ft.Container(
                 content=ft.Column([
                     ft.Row([
@@ -592,6 +664,7 @@ class WritingGuideView:
                     ft.Text(gap.reason, size=11, color=_C_META),
                     paper_row,
                     example_ctrl,
+                    external_ctrl,
                 ], spacing=6),
                 padding=12, border=ft.border.all(1, border_c),
                 border_radius=8, bgcolor="#FFFFFF",
@@ -606,7 +679,7 @@ class WritingGuideView:
                             color="#5B21B6"),
                     _chip(f"{len(enrichment.concept_gaps)} 個", color),
                 ], spacing=8),
-                ft.Text("補充這些概念可讓大綱更全面，附有文獻庫對應論文與寫作範例",
+                ft.Text("補充這些概念可讓大綱更全面，附有文獻庫對應論文、寫作範例與 arXiv 外部建議",
                         size=11, color=_C_META),
                 *gap_tiles,
             ], spacing=10)
@@ -626,6 +699,48 @@ class WritingGuideView:
             border_radius=12,
             bgcolor=bg,
         )
+
+    # ── 匯入 arXiv 論文 ────────────────────────────────────────────────
+
+    def _import_arxiv_paper(self, ext: dict, btn: ft.Control):
+        """將 arXiv 論文加入本地文獻庫（SQLite + ChromaDB）"""
+        btn.disabled = True
+        btn.text = "匯入中…"
+        self.page.update()
+
+        def _run():
+            try:
+                paper = Paper(
+                    title=ext.get("title", ""),
+                    abstract=ext.get("abstract"),
+                    doi=None,
+                    tags=[],
+                    authors=ext.get("authors", []),
+                    source="arxiv",
+                    venue=None,
+                    year=ext.get("year"),
+                )
+                paper_id = self._sqlite_db.insert(paper)
+                if paper.abstract:
+                    self._vector_db.add(
+                        paper_id=paper_id,
+                        abstract=paper.abstract,
+                        metadata={
+                            "title": paper.title,
+                            "year": paper.year,
+                            "source": "arxiv",
+                        },
+                    )
+                btn.text = "已加入"
+                btn.icon = "check_circle"
+                btn.style = ft.ButtonStyle(color="#059669")
+            except Exception as ex:
+                btn.text = "失敗"
+                btn.tooltip = str(ex)
+            finally:
+                self.page.update()
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── 匯出 ────────────────────────────────────────────────────────────
 
