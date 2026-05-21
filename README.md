@@ -18,7 +18,9 @@
 | **文獻分析** | 自動生成文獻回顧比較表 |
 | **設定頁面** | 管理 Gemini API Key 與模型選擇（即時生效） |
 
-## 快速開始（Windows）
+## 快速開始
+
+### 🪟 Windows
 
 **第一次使用：**
 
@@ -38,10 +40,50 @@ python setup_and_run.py   # 含首次設定精靈
 python main.py ui          # 直接啟動（需已安裝依賴）
 ```
 
+---
+
+### 🍎 macOS
+
+**環境需求（macOS）：**
+
+```bash
+# 安裝 Python 3.11（若尚未安裝）
+brew install python@3.11
+
+# 安裝 tkinter 支援（啟動畫面需要）
+brew install python-tk@3.11
+```
+
+**第一次使用：**
+
+```bash
+# 下載並解壓 ZIP 後，在終端機執行：
+bash launch.sh
+# → 自動建立虛擬環境、安裝套件、提示輸入 API Key、啟動程式
+```
+
+**之後每次啟動：**
+
+```bash
+bash launch.sh
+```
+
+**或直接從命令列啟動：**
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 僅首次
+.venv/bin/python main.py ui
+```
+
+---
+
 ## 環境需求
 
-- Python 3.11+
-- Gemini API Key（免費）：[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+| | Windows | macOS |
+|---|---|---|
+| Python | 3.11+（[python.org](https://www.python.org/downloads/)） | 3.11+（`brew install python@3.11`） |
+| tkinter | 內建 | `brew install python-tk@3.11` |
+| Gemini API Key | 免費取得：[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) | 同左 |
 
 API Key 可在程式內「設定」頁面隨時更換。
 
