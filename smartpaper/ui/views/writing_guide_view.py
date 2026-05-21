@@ -215,7 +215,7 @@ class WritingGuideView:
 
     # ── Step 1：搜尋候選論文 ──────────────────────────────────────────
 
-    def run_find_candidates(self, e):
+    def run_find_candidates(self, _e):
         sections = self._parse_outline()
         if not sections:
             self.status_text.value = "請輸入至少一個段落描述"
@@ -321,7 +321,7 @@ class WritingGuideView:
 
     # ── Step 2：AI 分析引用 ───────────────────────────────────────────
 
-    def run_analyze(self, e):
+    def run_analyze(self, _e):
         if not self._section_candidates:
             self.status_text.value = "請先執行步驟 1"
             self.page.update()
@@ -448,7 +448,7 @@ class WritingGuideView:
 
     # ── Step 3：缺口補強 ──────────────────────────────────────────────
 
-    def run_enrichment(self, e):
+    def run_enrichment(self, _e):
         if not self._last_guides:
             self.status_text.value = "請先完成步驟 2"
             self.page.update()
@@ -471,7 +471,7 @@ class WritingGuideView:
                 )
                 self._enrichment_result = enrichment
                 self.results_container.controls.append(
-                    self._build_enrichment_card(enrichment)
+                    self._build_enrichment_card(enrichment, self._last_guides)
                 )
                 self.page.update()
                 n_q = len(enrichment.follow_up_questions)
@@ -490,7 +490,103 @@ class WritingGuideView:
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _build_enrichment_card(self, enrichment: OutlineEnrichment) -> ft.Control:
+    def _build_section_writing_examples(
+        self, guides: list[SectionGuide],
+    ) -> ft.Control:
+        """Step 2 所有引用論文的寫作範例（放在 Step 3 最前面）"""
+        color, bg, border_c = _STEP_COLORS[1]  # teal
+        section_cards = []
+
+        for idx, guide in enumerate(guides, 1):
+            if not guide.citations:
+                continue
+
+            tiles = []
+            for c in guide.citations:
+                pos_bg, pos_fg = _POS_COLORS.get(c.cite_position, ("#F1F5F9", "#475569"))
+                tiles.append(ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Icon("article", size=13, color="#2563EB"),
+                            ft.Text(
+                                c.paper.title[:72] + ("…" if len(c.paper.title) > 72 else ""),
+                                size=12, weight=ft.FontWeight.W_600, expand=True,
+                            ),
+                            ft.Container(
+                                content=ft.Text(c.cite_position, size=10, color=pos_fg),
+                                bgcolor=pos_bg, border_radius=10,
+                                padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                            ),
+                        ], spacing=8),
+                        # 寫作範例框
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.Icon("edit_note", size=13, color="#1D4ED8"),
+                                    ft.Text("寫作範例", size=11, color="#1E40AF",
+                                            weight=ft.FontWeight.W_600),
+                                ], spacing=4),
+                                ft.Container(
+                                    content=ft.Text(
+                                        f"在「{guide.section}」的{c.cite_position}，"
+                                        f"引用此論文說明：{c.key_concept}。\n"
+                                        f"範例：「{c.cite_reason}」",
+                                        size=12, color="#1E3A5F",
+                                        selectable=True, italic=True,
+                                    ),
+                                    bgcolor="#EFF6FF",
+                                    border=ft.border.only(left=ft.BorderSide(3, "#3B82F6")),
+                                    padding=ft.padding.only(
+                                        left=12, top=8, bottom=8, right=10),
+                                    border_radius=4,
+                                ),
+                            ], spacing=6),
+                        ),
+                    ], spacing=6),
+                    padding=10,
+                    border=ft.border.all(1, "#BFDBFE"),
+                    border_radius=6, bgcolor="#FFFFFF",
+                ))
+
+            if tiles:
+                section_cards.append(ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            _step_badge(str(idx), color),
+                            ft.Text(guide.section, size=13,
+                                    weight=ft.FontWeight.W_600,
+                                    color=_C_TITLE, expand=True),
+                            _chip(f"{len(guide.citations)} 篇", color),
+                        ], spacing=8),
+                        *tiles,
+                    ], spacing=8),
+                    padding=12, border=ft.border.all(1, border_c),
+                    border_radius=10, bgcolor=bg,
+                ))
+
+        if not section_cards:
+            return ft.Container()
+
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon("menu_book", color=color, size=15),
+                    ft.Text("Step 2 引用論文寫作範例",
+                            size=13, weight=ft.FontWeight.W_600, color="#0D9488"),
+                    ft.Text("—  根據步驟 2 分析的引用論文，整理具體寫作建議",
+                            size=11, color=_C_META),
+                ], spacing=6),
+                *section_cards,
+            ], spacing=10),
+            padding=14,
+            border=ft.border.all(2, border_c),
+            border_radius=12,
+            bgcolor=bg,
+        )
+
+    def _build_enrichment_card(
+        self, enrichment: OutlineEnrichment, guides: list[SectionGuide],
+    ) -> ft.Control:
         color, bg, border_c = _STEP_COLORS[2]
 
         # ── 追問區 ──────────────────────────────────────────────────────
@@ -527,13 +623,18 @@ class WritingGuideView:
                 paper_row = ft.Container(
                     content=ft.Row([
                         ft.Icon("menu_book", size=13, color="#065F46"),
-                        ft.Text("對應論文：", size=11, color="#065F46",
+                        ft.Text("文獻庫對應論文：", size=11, color="#065F46",
                                 weight=ft.FontWeight.W_600),
                         ft.Text(
-                            gap.paper.title[:60] + ("…" if len(gap.paper.title) > 60 else ""),
+                            gap.paper.title[:55] + ("…" if len(gap.paper.title) > 55 else ""),
                             size=11, color="#047857", expand=True,
                         ),
                         ft.Text(f"({gap.paper.year or '?'})", size=10, color=_C_META),
+                        ft.Container(
+                            content=ft.Text("已在文獻庫", size=9, color=ft.colors.WHITE),
+                            bgcolor="#059669", border_radius=8,
+                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                        ),
                     ], spacing=6),
                     bgcolor="#ECFDF5", border_radius=6,
                     padding=ft.padding.symmetric(horizontal=10, vertical=6),
@@ -542,7 +643,7 @@ class WritingGuideView:
                 paper_row = ft.Container(
                     content=ft.Row([
                         ft.Icon("warning_amber", size=13, color="#B45309"),
-                        ft.Text("文獻庫無對應論文，建議補充外部文獻",
+                        ft.Text("文獻庫無對應論文 — 下方外部論文建議可加入",
                                 size=11, color="#92400E"),
                     ], spacing=6),
                     bgcolor="#FFFBEB", border_radius=6,
@@ -622,21 +723,21 @@ class WritingGuideView:
                                 if ext_authors else "",
                                 size=10, color=_C_META,
                             ),
-                            ft.Row([
-                                ft.Text(
-                                    (ext_abs[:120] + "…") if len(ext_abs) > 120 else ext_abs,
-                                    size=11, color="#374151", expand=True,
+                            ft.Text(
+                                (ext_abs[:150] + "…") if len(ext_abs) > 150 else ext_abs,
+                                size=11, color="#374151",
+                            ),
+                            ft.ElevatedButton(
+                                "加入文獻庫",
+                                icon="add_circle_outline",
+                                on_click=_make_import_handler(),
+                                style=ft.ButtonStyle(
+                                    bgcolor="#7C3AED",
+                                    color=ft.colors.WHITE,
+                                    padding=ft.padding.symmetric(horizontal=12, vertical=6),
                                 ),
-                                ft.TextButton(
-                                    "加入文獻庫",
-                                    icon="add_circle_outline",
-                                    on_click=_make_import_handler(),
-                                    style=ft.ButtonStyle(
-                                        color="#7C3AED",
-                                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                                    ),
-                                ),
-                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
+                                height=34,
+                            ),
                         ], spacing=4),
                         bgcolor="#EFF6FF" if ext_source == "Semantic Scholar" else "#F5F3FF",
                         border=ft.border.all(1, "#BFDBFE" if ext_source == "Semantic Scholar" else "#DDD6FE"),
@@ -692,21 +793,28 @@ class WritingGuideView:
                 *gap_tiles,
             ], spacing=10)
 
-        return ft.Container(
-            content=ft.Column([
-                ft.Row([
-                    ft.Icon("auto_fix_high", color=color, size=16),
-                    ft.Text("缺口補強分析", size=15, weight=ft.FontWeight.BOLD,
-                            color=color),
-                ], spacing=8),
-                followup_section,
-                gaps_section,
-            ], spacing=12),
-            padding=14,
-            border=ft.border.all(2, border_c),
-            border_radius=12,
-            bgcolor=bg,
-        )
+        examples_section = self._build_section_writing_examples(guides)
+
+        return ft.Column([
+            # ── Step 2 論文寫作範例（最前面）
+            examples_section,
+            # ── 缺口補強分析（原有）
+            ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon("auto_fix_high", color=color, size=16),
+                        ft.Text("缺口補強分析", size=15, weight=ft.FontWeight.BOLD,
+                                color=color),
+                    ], spacing=8),
+                    followup_section,
+                    gaps_section,
+                ], spacing=12),
+                padding=14,
+                border=ft.border.all(2, border_c),
+                border_radius=12,
+                bgcolor=bg,
+            ),
+        ], spacing=14)
 
     # ── 匯入 arXiv 論文 ────────────────────────────────────────────────
 
@@ -752,7 +860,7 @@ class WritingGuideView:
 
     # ── 匯出 ────────────────────────────────────────────────────────────
 
-    def export_guide(self, e):
+    def export_guide(self, _e):
         self.file_picker.save_file(
             dialog_title="儲存寫作導引",
             file_name="writing_guide.md",
