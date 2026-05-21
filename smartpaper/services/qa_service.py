@@ -16,6 +16,8 @@ from .reranker import Reranker
 from .search import SearchService
 from .conversation_memory import ConversationMemory, TOP_K_INJECT
 from .qa_skill import ConversationSkill
+from .intent_classifier import IntentClassifier
+from .semantic_cache import SemanticCache
 
 
 MAX_HISTORY_TURNS = 5     # 保留最近 N 輪對話
@@ -48,6 +50,11 @@ class QAResult:
     answer: str
     source_chunks: list[SourceChunk] = field(default_factory=list)
     query: str = ""
+    # ── 新增欄位（向後相容，有預設值）───────────────────────────────
+    intent: str = "qa"            # "qa" | "action" | "chitchat"
+    intent_conf: float = 1.0      # 意圖信心度 0-1
+    cache_hit: bool = False       # 是否命中語義快取
+    cache_type: str = ""          # "exact" | "semantic" | ""
 
     @property
     def sources(self) -> list[Paper]:
@@ -87,6 +94,10 @@ class QAService:
         self._gemini = GeminiTagger()
         self.memory = ConversationMemory()
         self.skill = ConversationSkill()
+        # 意圖分類器（規則層，不呼叫 LLM，毫秒級）
+        self._intent = IntentClassifier(use_llm_fallback=False)
+        # QA 層語義快取（快取完整 QA 回答，對話無 context 時才命中）
+        self._qa_cache = SemanticCache(similarity_threshold=0.95, ttl_seconds=1800)
 
     # ──────────────────────────────────────────────
     # 主要問答介面
@@ -112,9 +123,35 @@ class QAService:
             QAResult(answer, source_chunks, query)
         """
         history = history or []
+
+        # ── Step 0: 意圖分類（毫秒級規則層，無 API 呼叫）──────────────
+        intent, intent_conf = self._intent.classify(question)
+
+        # 閒聊直接回應，完全跳過 RAG pipeline
+        if intent == "chitchat":
+            answer = self._chitchat_response(question)
+            return QAResult(
+                answer=answer,
+                source_chunks=[],
+                query=question,
+                intent="chitchat",
+                intent_conf=intent_conf,
+            )
+
+        # ── Step 1: QA 語義快取（無對話 context 時嘗試命中）──────────
+        cache_hit, cache_type = False, ""
+        if not history and not filter_paper_ids and not context_paper_ids:
+            sem_hit, cached = self._qa_cache.get(question)
+            if sem_hit and cached is not None:
+                cached.cache_hit = True
+                cached.cache_type = "semantic"
+                cached.intent = intent
+                cached.intent_conf = intent_conf
+                return cached
+
+        # ── Step 2: 完整 RAG pipeline ────────────────────────────────
         turn = self.memory.next_turn()
 
-        # 1. 取得來源 chunks
         source_chunks = self._retrieve(
             question,
             top_k=top_k,
@@ -122,19 +159,57 @@ class QAService:
             context_paper_ids=context_paper_ids,
         )
 
-        # 2. 建立 context + 記憶注入
         context = self._build_context(source_chunks)
         top_memories = self.memory.get_top_k(query=question, k=TOP_K_INJECT)
         memory_text = self.memory.to_prompt(top_memories) if top_memories else ""
 
-        # 3. 呼叫 LLM
         prompt = self._build_prompt(question, context, history, memory_text)
         answer = self._call_llm(prompt)
 
-        # 4. 非同步萃取本輪記憶（背景執行，不阻塞回傳）
+        # 非同步萃取本輪記憶（背景執行，不阻塞回傳）
         self.skill.extract_async(turn, question, answer, source_chunks, self.memory)
 
-        return QAResult(answer=answer, source_chunks=source_chunks, query=question)
+        result = QAResult(
+            answer=answer,
+            source_chunks=source_chunks,
+            query=question,
+            intent=intent,
+            intent_conf=intent_conf,
+            cache_hit=False,
+            cache_type="",
+        )
+
+        # 無 context 依賴時才寫入 QA 快取
+        if not history and not filter_paper_ids and not context_paper_ids:
+            self._qa_cache.put(question, result)
+
+        return result
+
+    def _chitchat_response(self, question: str) -> str:
+        """閒聊回應（不呼叫 RAG，不消耗向量資源）"""
+        greetings = {
+            "你好": "你好！我是 SmartPaper 學術助理。有什麼論文相關的問題嗎？",
+            "hi":   "Hi! I'm your SmartPaper research assistant. Feel free to ask about your papers!",
+            "嗨":   "嗨！我可以幫你查詢文獻庫、回答論文問題，或分析研究主題。",
+        }
+        q_lower = question.lower().strip()
+        for key, reply in greetings.items():
+            if q_lower.startswith(key):
+                return reply
+
+        # 通用閒聊
+        try:
+            prompt = (
+                f"用戶說：「{question}」\n\n"
+                "你是 SmartPaper 學術論文管理助理，請用一到兩句話友善回應（繁體中文），"
+                "並自然地引導用戶詢問論文相關問題。不要捏造任何論文或資料。"
+            )
+            resp = self._gemini.client.models.generate_content(
+                model=self._gemini.model_name, contents=prompt
+            )
+            return resp.text.strip()
+        except Exception:
+            return "您好！請問有什麼論文相關的問題需要我幫忙查詢嗎？"
 
     # ──────────────────────────────────────────────
     # 檢索邏輯

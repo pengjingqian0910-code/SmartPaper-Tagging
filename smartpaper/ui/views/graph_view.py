@@ -139,6 +139,7 @@ class GraphView:
             self._build_year_trend(stats),
             self._build_tag_analysis(),
             self._build_graph_section(),
+            self._build_focus_section(),
             self._build_export_section(),
             self._build_dedup_section(),
             ft.Row([self.progress, self.status], spacing=8),
@@ -845,6 +846,104 @@ class GraphView:
         except Exception as ex:
             import traceback
             self.status.value = f"圖譜生成失敗：{ex}"
+            traceback.print_exc()
+        finally:
+            self._set_idle()
+
+    # ── 聚焦模式（N 跳鄰居圖譜）─────────────────────────────────────
+
+    def _build_focus_section(self) -> ft.Container:
+        """只渲染選定論文的 N 跳鄰居，避免 300+ 節點卡死。"""
+        # Paper selector dropdown (id → title)
+        paper_options = [
+            ft.dropdown.Option(str(p.id), f"[{p.id}] {p.title[:50]}{'…' if len(p.title) > 50 else ''}")
+            for p in self._papers[:200]
+        ]
+        self._focus_paper_dd = ft.Dropdown(
+            label="選擇中心論文",
+            options=paper_options,
+            value=str(self._papers[0].id) if self._papers else None,
+            expand=True,
+            dense=True,
+        )
+
+        self._focus_hops_dd = ft.Dropdown(
+            label="跳數", value="2", width=90,
+            options=[
+                ft.dropdown.Option("1", "1 跳"),
+                ft.dropdown.Option("2", "2 跳 ★"),
+                ft.dropdown.Option("3", "3 跳"),
+            ],
+        )
+
+        self._focus_graph_type = ft.RadioGroup(
+            content=ft.Row([
+                ft.Radio(value="tag",      label="共享標籤 ★"),
+                ft.Radio(value="concept",  label="共享概念"),
+                ft.Radio(value="citation", label="引用關係"),
+            ]),
+            value="tag",
+        )
+
+        self._focus_min_shared = ft.Dropdown(
+            label="最少共享數", value="1", width=110,
+            options=[ft.dropdown.Option(str(n), f"≥{n}") for n in [1, 2, 3]],
+        )
+
+        gen_btn = ft.ElevatedButton(
+            "生成聚焦圖譜",
+            icon="center_focus_strong",
+            on_click=self._on_gen_focus_graph,
+            style=ft.ButtonStyle(bgcolor=ROSE, color="#FFFFFF"),
+        )
+
+        return _section("聚焦模式：N 跳鄰居圖譜", "hub", [
+            ft.Text(
+                "只渲染選定論文的直接 / 二階鄰居，解決大型圖譜卡頓問題",
+                size=11, color=TEXT_S,
+            ),
+            ft.Row([self._focus_paper_dd, self._focus_hops_dd], spacing=10),
+            ft.Row([self._focus_graph_type, self._focus_min_shared, gen_btn],
+                   spacing=10, wrap=True),
+            ft.Text(
+                "1 跳=直接相連  2 跳=朋友的朋友  3 跳=更廣社群\n"
+                "節點數通常遠少於全圖，渲染更快，互動更流暢",
+                size=10, color=TEXT_S,
+            ),
+        ], color=ROSE)
+
+    def _on_gen_focus_graph(self, e):
+        if not self._focus_paper_dd.value:
+            self.status.value = "請先選擇中心論文"
+            self.page.update()
+            return
+
+        center_id = int(self._focus_paper_dd.value)
+        hops = int(self._focus_hops_dd.value or "2")
+        graph_type = self._focus_graph_type.value or "tag"
+        min_shared = int(self._focus_min_shared.value or "1")
+
+        center_paper = next((p for p in self._papers if p.id == center_id), None)
+        title_snippet = center_paper.title[:30] if center_paper else str(center_id)
+
+        self._set_busy(f"建立聚焦圖譜（{title_snippet}… {hops} 跳）…")
+        try:
+            html_path = self.kg_service.build_neighborhood_graph(
+                center_paper_id=center_id,
+                hops=hops,
+                graph_type=graph_type,
+                min_shared=min_shared,
+                color_by=self.color_by_dd.value if hasattr(self, "color_by_dd") else "tag",
+            )
+            if not html_path:
+                self.status.value = "鄰居圖譜為空（請確認論文有標籤或引用關係）"
+                return
+            import webbrowser
+            webbrowser.open(f"file:///{html_path}")
+            self.status.value = f"已開啟聚焦圖譜：「{title_snippet}」{hops} 跳鄰居"
+        except Exception as ex:
+            import traceback
+            self.status.value = f"聚焦圖譜生成失敗：{ex}"
             traceback.print_exc()
         finally:
             self._set_idle()

@@ -11,6 +11,7 @@ from ..database.vector_db import VectorDB
 from ..models import Paper, SearchResult
 from .reranker import Reranker
 from .bm25_index import BM25Index, reciprocal_rank_fusion
+from .semantic_cache import SemanticCache
 
 _QUERY_CACHE_MAX = 128
 
@@ -35,6 +36,8 @@ class SearchService:
         self.reranker = Reranker()
         self._bm25 = BM25Index()
         self._query_cache: OrderedDict[tuple, list] = OrderedDict()
+        # 語義快取：重用 VectorDB 已載入的 allenai-specter，零額外模型負擔
+        self._sem_cache = SemanticCache(similarity_threshold=0.93, ttl_seconds=3600)
 
     def _ensure_bm25(self) -> None:
         """懶載入：第一次搜尋時建立 BM25 索引"""
@@ -43,9 +46,14 @@ class SearchService:
             self._bm25.build(papers)
 
     def invalidate_bm25(self) -> None:
-        """資料庫更新後讓 BM25 索引與 query 快取全部失效"""
+        """資料庫更新後讓 BM25 索引、精確快取、語義快取全部失效"""
         self._bm25 = BM25Index()
         self._query_cache.clear()
+        self._sem_cache.invalidate()
+
+    def cache_stats(self) -> dict:
+        """回傳語義快取統計資訊（用於 UI 顯示）"""
+        return self._sem_cache.stats()
 
     def invalidate_search_cache(self) -> None:
         """手動清除 query-level LRU 快取"""
@@ -198,6 +206,11 @@ class SearchService:
         """
         BM25 + 向量語意搜尋，透過 Reciprocal Rank Fusion 合併排名
 
+        效能優化（由快到慢）：
+          1. 精確 LRU 快取（O(1)，字串完全相同時命中）
+          2. 語義快取（cos_sim ≥ 0.93，相似查詢重用結果）
+          3. 完整 pipeline：BM25 + 向量 + CrossEncoder
+
         Args:
             query: 搜尋查詢
             n_results: 最終回傳結果數量
@@ -206,11 +219,18 @@ class SearchService:
         Returns:
             SearchResult 清單
         """
-        # ── Query-level LRU 快取 ───────────────────────────────────────
+        # ── Layer 1: 精確 LRU 快取 ────────────────────────────────────
         cache_key = ("hybrid", query, n_results, use_rerank)
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
+
+        # ── Layer 2: 語義快取（模糊命中）────────────────────────────
+        sem_hit, sem_result = self._sem_cache.get(query)
+        if sem_hit and sem_result is not None:
+            # 也寫入精確快取，下次直接命中
+            self._cache_put(cache_key, sem_result)
+            return sem_result
 
         # ── 1. 語意搜尋（擴大候選量）
         fetch_n = max(n_results * 3, 30)
@@ -270,6 +290,7 @@ class SearchService:
 
         results = [SearchResult(paper=f["paper"], score=f["rrf_score"]) for f in fused[:n_results]]
         self._cache_put(cache_key, results)
+        self._sem_cache.put(query, results)   # 寫入語義快取
         return results
 
     def find_similar(self, paper_id: int, n_results: int = 5) -> list[SearchResult]:

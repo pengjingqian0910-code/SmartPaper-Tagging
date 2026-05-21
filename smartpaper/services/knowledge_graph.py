@@ -479,6 +479,81 @@ class KnowledgeGraphService:
 
         return str(html_path)
 
+    def build_neighborhood_graph(
+        self,
+        center_paper_id: int,
+        hops: int = 2,
+        graph_type: str = "tag",
+        min_shared: int = 1,
+        color_by: str = "tag",
+        output_path: Optional[str] = None,
+    ) -> str:
+        """只渲染中心論文的 N 跳鄰居，防止 300+ 節點卡死。"""
+        papers = self.db.get_all(limit=5000)
+        paper_map = {p.id: p for p in papers}
+
+        if center_paper_id not in paper_map:
+            return self.build_interactive_graph(
+                graph_type=graph_type,
+                min_shared=min_shared,
+                color_by=color_by,
+                output_path=output_path,
+            )
+
+        # Build adjacency list
+        adj: dict[int, set[int]] = {p.id: set() for p in papers}
+
+        if graph_type == "tag":
+            tag_sets = {p.id: set(p.tags or []) for p in papers}
+            pids = list(tag_sets)
+            for i in range(len(pids)):
+                for j in range(i + 1, len(pids)):
+                    if len(tag_sets[pids[i]] & tag_sets[pids[j]]) >= min_shared:
+                        adj[pids[i]].add(pids[j])
+                        adj[pids[j]].add(pids[i])
+
+        elif graph_type == "concept":
+            import re as _re
+            def _concepts(p):
+                if not p.tags:
+                    return set()
+                return {t.lower().strip() for t in p.tags}
+            concept_sets = {p.id: _concepts(p) for p in papers}
+            pids = list(concept_sets)
+            for i in range(len(pids)):
+                for j in range(i + 1, len(pids)):
+                    if len(concept_sets[pids[i]] & concept_sets[pids[j]]) >= min_shared:
+                        adj[pids[i]].add(pids[j])
+                        adj[pids[j]].add(pids[i])
+
+        elif graph_type == "citation":
+            for p in papers:
+                refs = getattr(p, "references", None) or []
+                for ref_id in refs:
+                    if ref_id in adj:
+                        adj[p.id].add(ref_id)
+                        adj[ref_id].add(p.id)
+
+        # BFS from center up to `hops` hops
+        visited: set[int] = {center_paper_id}
+        frontier: set[int] = {center_paper_id}
+        for _ in range(hops):
+            next_frontier: set[int] = set()
+            for pid in frontier:
+                for neighbor in adj.get(pid, set()):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        next_frontier.add(neighbor)
+            frontier = next_frontier
+
+        return self.build_interactive_graph(
+            graph_type=graph_type,
+            min_shared=min_shared,
+            paper_ids=list(visited),
+            color_by=color_by,
+            output_path=output_path,
+        )
+
 
 # ── HTML injection ──────────────────────────────────────────────────────────
 
