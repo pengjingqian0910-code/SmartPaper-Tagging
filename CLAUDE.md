@@ -15,27 +15,52 @@
 
 ```
 smartpaper/
-├── api/                    # 外部 API
-│   ├── crossref.py         # Crossref API - 取得論文 DOI、摘要
-│   └── gemini.py           # Gemini API - 自動生成標籤
-├── database/               # 資料庫層
-│   ├── sqlite_db.py        # SQLite - 論文元資料存儲
-│   └── vector_db.py        # ChromaDB - 向量搜尋
-├── processing/             # 資料處理
+├── config.py               # 全域設定（API Key、模型選擇、_update_env）
+├── models.py               # 資料模型（Paper、TaggingResult…）
+├── api/
+│   ├── gemini.py           # Gemini LLM（標籤、問答；model_name 動態讀 config）
+│   ├── crossref.py         # Crossref — DOI / 摘要查詢
+│   ├── arxiv.py            # arXiv — 快速匯入 + 外部論文建議
+│   └── semantic_scholar.py # 論文推薦 + 引用關係抓取
+├── database/
+│   ├── sqlite_db.py        # SQLite — 論文 metadata（LRU 快取）
+│   ├── vector_db.py        # ChromaDB — 向量搜尋（singleton embedding）
+│   └── chunk_store.py      # PDF 全文 chunk 儲存
+├── processing/
+│   ├── pdf_parser.py       # PDF 解析（pymupdf4llm + pdfplumber fallback）
 │   ├── cleaner.py          # HTML 清理、文字正規化
 │   └── tagger.py           # 標籤邏輯
-├── services/               # 業務邏輯
+├── services/
+│   ├── pipeline.py         # 主處理流程（含 Semantic Scholar 引用抓取）
+│   ├── search.py           # 混合搜尋（向量 + BM25 + LRU query 快取）
+│   ├── reranker.py         # CrossEncoder 重排
+│   ├── qa_service.py       # Classic RAG 問答（多輪對話 + 追問建議）
+│   ├── qa_service_fc.py    # Function Calling 問答（手動 FC loop）
+│   ├── qa_skill.py         # 對話技能萃取
+│   ├── conversation_memory.py  # 時間衰減對話記憶
+│   ├── writing_guide.py    # 寫作引用導引（含 SS + arXiv 外部建議）
+│   ├── classifier.py       # 論文分類（semantic / two_stage / llm）
+│   ├── literature_analyzer.py  # 文獻回顧分析
+│   ├── knowledge_graph.py  # 知識圖譜
+│   ├── citation.py         # 引用關係管理
 │   ├── ingestion.py        # Excel 讀取
-│   ├── pipeline.py         # 主處理流程
-│   ├── search.py           # 搜尋服務
-│   └── classifier.py       # 論文分類服務 (新增)
-└── ui/                     # Flet 桌面介面
-    ├── app.py              # 主應用程式
+│   ├── pdf_ingestion.py    # PDF 全文匯入
+│   ├── pdf_import_service.py   # 從 PDF 建立新論文
+│   ├── quick_import.py     # DOI / arXiv 快速匯入
+│   └── api_server.py       # 本地 API server（bookmarklet 用）
+└── ui/
+    ├── app.py              # 主應用程式（側邊欄導航，設定齒輪在底部）
+    ├── theme.py            # 顏色 / 字體常數
     └── views/
-        ├── home_view.py    # 首頁 - 檔案上傳
-        ├── papers_view.py  # 論文管理
-        ├── search_view.py  # 搜尋介面
-        └── classify_view.py # 分類介面 (新增)
+        ├── home_view.py
+        ├── papers_view.py       # 論文管理 + 推薦相似論文
+        ├── search_view.py
+        ├── classify_view.py
+        ├── writing_guide_view.py
+        ├── graph_view.py
+        ├── literature_view.py
+        ├── qa_view.py           # 問論文（Classic RAG + Function Calling）
+        └── settings_view.py     # API Key 與模型設定
 ```
 
 ## 資料庫

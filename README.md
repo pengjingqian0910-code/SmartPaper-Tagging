@@ -1,78 +1,49 @@
-# SmartPaper-Tagging
+# SmartPaper
 
-智能學術論文管理系統 — 從 Excel 匯入到 AI 問答，一站式管理你的文獻庫。
+智能學術論文管理系統 — 從匯入到 AI 問答，一站式管理你的文獻庫。
 
-## 功能總覽
+## 功能
 
 | 功能 | 說明 |
 |---|---|
 | **Excel / DOI / arXiv 匯入** | 批次匯入或一鍵貼入 DOI / arXiv ID |
 | **AI 自動標籤** | Gemini 分析摘要，生成結構化標籤 |
-| **PDF 全文解析** | pymupdf4llm Markdown 解析，章節感知分割（Methodology > Results 優先） |
+| **PDF 全文解析** | 章節感知分割，Methodology / Results 優先 |
 | **混合語意搜尋** | ChromaDB 向量 + BM25 關鍵字，CrossEncoder 重排 |
-| **RAG 問答** | 多輪對話，對話記憶自動萃取，引用來源標注（APA / MLA 一鍵複製） |
-| **多 Session 對話紀錄** | 最多保留 5 個獨立對話，自由切換或刪除 |
-| **引導式追問** | 每次回答後自動提供 2 個延伸問題建議 |
-| **寫作引用導引** | 輸入大綱，三步驟推薦引用論文、段落位置與寫作範例 |
-| **arXiv 外部論文建議** | 寫作導引缺口分析時自動查詢 arXiv，一鍵加入文獻庫 |
+| **RAG 問答** | Classic RAG 與 Function Calling 兩種模式，多輪對話，APA / MLA 引用一鍵複製 |
+| **論文推薦** | 本地相似論文 + Semantic Scholar / arXiv 外部推薦，一鍵加入文獻庫 |
+| **寫作引用導引** | 輸入大綱，推薦引用論文、段落位置與寫作範例 |
+| **分類系統** | 語意 / 兩階段 RAG / LLM 三種分類方法 |
 | **知識圖譜** | 論文概念關係視覺化 |
 | **文獻分析** | 自動生成文獻回顧比較表 |
-| **標籤管理** | 重命名、合併、刪除標籤 |
-| **分類系統** | 語意 / 兩階段 RAG / LLM 三種分類方法 |
+| **設定頁面** | 管理 Gemini API Key 與模型選擇（即時生效） |
 
-## 快速開始
+## 快速開始（Windows）
 
-### Windows
-
-```bat
-# 1. 安裝（一次性，自動下載 uv、建立虛擬環境、安裝依賴）
-install.bat
-
-# 2. 每次啟動（自動開設定精靈補填 API Key）
-launch.bat
-```
-
-### Mac / Linux
+**第一次使用：**
 
 ```bash
-chmod +x install.sh launch.sh
-./install.sh   # 一次性安裝
-./launch.sh    # 每次啟動
+# 1. 建立桌面捷徑（只需執行一次）
+python create_shortcut.py
+
+# 2. 雙擊桌面的 SmartPaper 圖示
+#    → 首次點擊會自動建立虛擬環境、安裝套件、設定 API Key
+#    → 之後每次點擊直接開啟程式
 ```
 
-### Docker（Web 模式）
+**或直接從命令列啟動：**
 
 ```bash
-cp .env.example .env
-# 填入 GEMINI_API_KEY
-
-docker compose up -d
-# 開啟 http://localhost:8550
+python setup_and_run.py   # 含首次設定精靈
+python main.py ui          # 直接啟動（需已安裝依賴）
 ```
 
-## 手動安裝
+## 環境需求
 
-```bash
-python -m venv .venv
-source .venv/bin/activate      # Linux/Mac
-# 或 .venv\Scripts\activate    # Windows
+- Python 3.11+
+- Gemini API Key（免費）：[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
 
-pip install -r requirements.txt
-
-cp .env.example .env
-# 編輯 .env 填入 GEMINI_API_KEY
-
-python main.py ui
-```
-
-## 環境設定
-
-```env
-GEMINI_API_KEY=你的 Gemini API Key   # 必填
-CROSSREF_EMAIL=your@email.com        # 選填，加快 Crossref 速率
-```
-
-取得 Gemini API Key：[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+API Key 可在程式內「設定」頁面隨時更換。
 
 ## CLI 指令
 
@@ -88,71 +59,79 @@ python main.py export -o out.xlsx            # 匯出
 python main.py stats                         # 統計資訊
 ```
 
-## 系統架構
+## 架構
 
 ```
-smartpaper/
-├── api/                    # 外部 API
-│   ├── crossref.py         # Crossref — DOI / 摘要
-│   ├── gemini.py           # Gemini — 標籤生成、RAG
-│   ├── arxiv.py            # arXiv — 快速匯入 + 外部論文建議
-│   └── semantic_scholar.py
-├── database/               # 資料庫層
-│   ├── sqlite_db.py        # SQLite — 論文 metadata（LRU 記憶體快取）
-│   ├── vector_db.py        # ChromaDB — 向量搜尋（singleton embedding model）
-│   └── chunk_store.py      # PDF 全文 chunk 儲存
-├── processing/             # 資料處理
-│   ├── pdf_parser.py       # pymupdf4llm Markdown 解析 + pdfplumber fallback
-│   ├── cleaner.py
-│   └── tagger.py
-├── services/               # 業務邏輯
-│   ├── pipeline.py         # 主處理流程
-│   ├── search.py           # 混合搜尋（向量 + BM25 + LRU query 快取）
-│   ├── reranker.py         # CrossEncoder 重排（BM25 pre-filter + score 快取）
-│   ├── qa_service.py       # RAG 問答（多輪對話 + 追問建議）
-│   ├── qa_skill.py         # 對話記憶萃取
-│   ├── conversation_memory.py  # 時間衰減記憶系統
-│   ├── writing_guide.py    # 寫作引用導引（三步驟 + arXiv 外部建議）
-│   ├── classifier.py       # 論文分類（三種方法）
-│   ├── literature_analyzer.py  # 文獻回顧分析
-│   ├── knowledge_graph.py  # 知識圖譜
-│   └── quick_import.py     # DOI / arXiv 快速匯入
-└── ui/                     # Flet 桌面介面
-    ├── app.py
-    └── views/
-        ├── home_view.py
-        ├── papers_view.py
-        ├── search_view.py
-        ├── classify_view.py
-        ├── writing_guide_view.py  # 左右分欄 + arXiv 建議
-        ├── graph_view.py
-        ├── literature_view.py
-        └── qa_view.py             # 多 session 對話紀錄
+SmartPaper-Tagging/
+├── main.py                  # CLI 入口
+├── setup_and_run.py         # 首次設定精靈（venv + 套件 + API Key）
+├── launcher.py              # 啟動動畫
+├── create_shortcut.py       # 建立 Windows 桌面捷徑
+├── scripts/                 # 開發 / 工具腳本
+│   ├── dev.py               # 熱重載開發啟動器
+│   ├── eval_rag.py          # RAG 評估腳本
+│   ├── make_icon.py         # 圖示產生器
+│   └── generate_report.py  # 文件報告產生器
+└── smartpaper/
+    ├── config.py            # 全域設定（API Key、模型選擇）
+    ├── models.py            # 資料模型（Paper、TaggingResult…）
+    ├── api/
+    │   ├── gemini.py        # Gemini LLM（標籤、問答、分類）
+    │   ├── crossref.py      # Crossref — DOI / 摘要查詢
+    │   ├── arxiv.py         # arXiv — 快速匯入 + 外部論文建議
+    │   └── semantic_scholar.py  # 論文推薦 + 引用關係
+    ├── database/
+    │   ├── sqlite_db.py     # SQLite — 論文 metadata
+    │   ├── vector_db.py     # ChromaDB — 向量搜尋
+    │   └── chunk_store.py   # PDF 全文 chunk 儲存
+    ├── processing/
+    │   ├── pdf_parser.py    # PDF 解析（pymupdf4llm + pdfplumber fallback）
+    │   ├── cleaner.py       # HTML 清理、文字正規化
+    │   └── tagger.py        # 標籤邏輯
+    ├── services/
+    │   ├── pipeline.py      # 主處理流程（含 Semantic Scholar 引用抓取）
+    │   ├── search.py        # 混合搜尋（向量 + BM25 + LRU 快取）
+    │   ├── reranker.py      # CrossEncoder 重排
+    │   ├── qa_service.py    # Classic RAG 問答
+    │   ├── qa_service_fc.py # Function Calling 問答
+    │   ├── writing_guide.py # 寫作引用導引
+    │   ├── classifier.py    # 論文分類（三種方法）
+    │   ├── literature_analyzer.py  # 文獻回顧分析
+    │   ├── knowledge_graph.py      # 知識圖譜
+    │   ├── citation.py      # 引用關係管理
+    │   ├── ingestion.py     # Excel 讀取
+    │   ├── pdf_ingestion.py # PDF 全文匯入
+    │   ├── pdf_import_service.py   # 從 PDF 建立新論文
+    │   ├── quick_import.py  # DOI / arXiv 快速匯入
+    │   ├── conversation_memory.py  # 時間衰減對話記憶
+    │   └── qa_skill.py      # 對話技能萃取
+    └── ui/
+        ├── app.py           # 主應用程式（側邊欄導航）
+        ├── theme.py         # 顏色 / 字體常數
+        └── views/
+            ├── home_view.py
+            ├── papers_view.py       # 論文管理 + 推薦相似論文
+            ├── search_view.py
+            ├── classify_view.py
+            ├── writing_guide_view.py
+            ├── graph_view.py
+            ├── literature_view.py
+            ├── qa_view.py           # 問論文（含 Function Calling 模式）
+            └── settings_view.py     # API Key 與模型設定
 ```
 
-## 核心技術
+## 技術棧
 
-- **語言**: Python 3.11+
-- **UI**: [Flet](https://flet.dev)（跨平台桌面 / Web）
-- **LLM**: Google Gemini（`google-genai`）
-- **向量搜尋**: ChromaDB + `allenai-specter` embeddings
-- **關鍵字搜尋**: BM25（`rank-bm25`）
-- **重排**: CrossEncoder（`cross-encoder/ms-marco-MiniLM-L-6-v2`）
-- **對話記憶**: `paraphrase-multilingual-MiniLM-L12-v2`（中英文）
-- **PDF 解析**: pymupdf4llm（主）+ pdfplumber（fallback）
-- **外部文獻**: arXiv API（免費，無需 Key）
-- **資料庫**: SQLite + ChromaDB
-
-## 效能優化
-
-| 優化 | 效益 |
+| 類別 | 技術 |
 |---|---|
-| Embedding model singleton | 440 MB 模型僅載入一次，後續 VectorDB 實例共用 |
-| Paper LRU 記憶體快取（2000 筆） | 重複查詢論文 0 SQL roundtrip |
-| `get_by_ids()` 批次查詢 | N 次 `get_by_id` → 1 次 `WHERE IN` |
-| BM25 pre-filter（候選 > 20 篇） | CrossEncoder 推論量減少 ~60% |
-| CrossEncoder score memoization | 相同 query + paper 組合跳過推論 |
-| Hybrid search LRU query 快取（128 筆） | 相同問題第 2 次起即時回傳 |
+| UI | [Flet](https://flet.dev)（Python 桌面框架） |
+| LLM | Google Gemini（`google-genai`），可在設定頁切換模型 |
+| 向量搜尋 | ChromaDB + `allenai-specter` embeddings |
+| 關鍵字搜尋 | BM25（`rank-bm25`） |
+| 重排 | CrossEncoder（`cross-encoder/ms-marco-MiniLM-L-6-v2`） |
+| PDF 解析 | pymupdf4llm（主）+ pdfplumber（fallback） |
+| 資料庫 | SQLite + ChromaDB |
+| 外部文獻 | Semantic Scholar API、arXiv API（免費，無需 Key） |
 
 ## License
 

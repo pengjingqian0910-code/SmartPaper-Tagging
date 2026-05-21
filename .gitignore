@@ -17,6 +17,7 @@ ENV/
 # Environment
 .env
 .env.local
+.setup_done
 
 # Data
 data/*.db
