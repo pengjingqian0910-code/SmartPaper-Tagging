@@ -23,8 +23,9 @@ from typing import Optional
 from ..database.sqlite_db import SQLiteDB
 from ..models import Paper
 
-_GRAPH_CACHE_DIR = Path("data/graph_cache")
-_ADJ_CACHE_FILE  = Path("data/adj_cache.pkl")
+_PROJECT_ROOT    = Path(__file__).resolve().parents[2]
+_GRAPH_CACHE_DIR = _PROJECT_ROOT / "data" / "graph_cache"
+_ADJ_CACHE_FILE  = _PROJECT_ROOT / "data" / "adj_cache.pkl"
 
 
 _PALETTE = [

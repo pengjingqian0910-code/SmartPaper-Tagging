@@ -96,10 +96,6 @@ class GraphView:
         self._mode_btn_containers: dict[str, ft.Container] = {}
         # 年份點擊篩選
         self._year_filter_col: Optional[ft.Column] = None
-        # 內嵌 WebView（知識圖譜）
-        self._webview: Optional[ft.WebView] = None
-        self._webview_container: Optional[ft.Container] = None
-
         # Last generated graph path (for "另開瀏覽器")
         self._last_html_path: Optional[str] = None
 
@@ -922,53 +918,16 @@ class GraphView:
         )
 
         gen_btn = ft.ElevatedButton(
-            "生成並預覽圖譜",
-            icon="hub",
+            "生成並在瀏覽器開啟",
+            icon="open_in_browser",
             on_click=self._on_gen_graph,
             style=ft.ButtonStyle(bgcolor=ACCENT, color="#FFFFFF"),
         )
-        open_browser_btn = ft.OutlinedButton(
-            "另開瀏覽器",
-            icon="open_in_browser",
+        reopen_btn = ft.OutlinedButton(
+            "重新開啟",
+            icon="refresh",
             on_click=self._on_open_graph_browser,
             style=ft.ButtonStyle(color=ACCENT),
-        )
-
-        # ── 內嵌 WebView ──────────────────────────────────────────────
-        try:
-            self._webview = ft.WebView(url="about:blank", expand=True)
-        except Exception:
-            self._webview = None
-
-        self._webview_status_text = ft.Text(
-            "生成圖譜後將在此預覽（需系統安裝 WebView2 / WebKit）",
-            size=11, color=TEXT_S, italic=True,
-        )
-        self._webview_container = ft.Container(
-            content=ft.Column([
-                ft.Row([
-                    ft.Icon("preview", size=14, color=TEAL),
-                    ft.Text("內嵌圖譜預覽", size=12, weight=ft.FontWeight.W_600, color=TEXT_H),
-                    ft.Container(expand=True),
-                    self._webview_status_text,
-                ], spacing=8),
-                ft.Container(
-                    content=self._webview if self._webview else ft.Text(
-                        "⚠️ 系統不支援內嵌 WebView，請使用「另開瀏覽器」",
-                        size=12, color=TEXT_M,
-                    ),
-                    height=420,
-                    border=ft.border.all(1, BORDER),
-                    border_radius=8,
-                    bgcolor=BG,
-                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                ),
-            ], spacing=6),
-            visible=False,
-            bgcolor=CARD,
-            border=ft.border.all(1, BORDER),
-            border_radius=12,
-            padding=16,
         )
 
         return _section("知識圖譜視覺化（互動）", "bubble_chart", [
@@ -988,14 +947,13 @@ class GraphView:
                 bgcolor=BG,
             ),
             ft.Row([self.graph_type, self.min_shared_dd], spacing=10, wrap=True),
-            ft.Row([self.color_by_dd, self.layout_dd, gen_btn, open_browser_btn],
+            ft.Row([self.color_by_dd, self.layout_dd, gen_btn, reopen_btn],
                    spacing=10, wrap=True),
             ft.Text(
                 "節點大小∝度中心性　顏色可選標籤/年份/引用數　邊=共享關聯\n"
                 "互動操作：滾輪縮放 · 拖拽節點 · 單擊高亮鄰居 · 圖例點擊閃爍 · Esc 重置",
                 size=10, color=TEXT_S,
             ),
-            self._webview_container,
         ])
 
     def _on_graph_search(self, e):
@@ -1032,16 +990,9 @@ class GraphView:
 
             self._last_html_path = str(html_path)
             file_url = f"file:///{str(html_path).replace(chr(92), '/')}"
-
-            if self._webview is not None:
-                self._webview.url = file_url
-                self._webview_container.visible = True
-                self._webview_status_text.value = f"已載入：{Path(html_path).name}"
-                self.status.value = f"圖譜已在下方預覽（{len(selected_ids)} 篇論文）"
-            else:
-                import webbrowser
-                webbrowser.open(file_url)
-                self.status.value = f"已在瀏覽器開啟互動圖譜（{len(selected_ids)} 篇論文）"
+            import webbrowser
+            webbrowser.open(file_url)
+            self.status.value = f"已在瀏覽器開啟互動圖譜（{len(selected_ids)} 篇論文）"
         except Exception as ex:
             import traceback
             self.status.value = f"圖譜生成失敗：{ex}"
@@ -1151,16 +1102,9 @@ class GraphView:
 
             self._last_html_path = str(html_path)
             file_url = f"file:///{str(html_path).replace(chr(92), '/')}"
-
-            if self._webview is not None:
-                self._webview.url = file_url
-                self._webview_container.visible = True
-                self._webview_status_text.value = f"已載入：{Path(html_path).name}"
-                self.status.value = f"聚焦圖譜已預覽：「{title_snippet}」{hops} 跳鄰居"
-            else:
-                import webbrowser
-                webbrowser.open(file_url)
-                self.status.value = f"已開啟聚焦圖譜：「{title_snippet}」{hops} 跳鄰居"
+            import webbrowser
+            webbrowser.open(file_url)
+            self.status.value = f"已在瀏覽器開啟聚焦圖譜：「{title_snippet}」{hops} 跳鄰居"
         except Exception as ex:
             import traceback
             self.status.value = f"聚焦圖譜生成失敗：{ex}"

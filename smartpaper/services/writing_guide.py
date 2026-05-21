@@ -339,35 +339,35 @@ class WritingGuideService:
 
         # ── Call 1：找出 follow-up questions + missing concepts ──────
         prompt1 = f"""{_WRITING_EXPERT_PROMPT}
-請以嚴格的學術寫作顧問角色，檢視論文大綱是否完整、有深度。
+Act as a strict academic writing consultant. Evaluate whether the following paper outline is complete and sufficiently rigorous.
 
-作者的論文大綱：
+Paper outline:
 {outline_text}
 
-目前已建議的引用文獻分布：
+Current citation distribution across sections:
 {citations_summary}
 
-請分析並回答：
-1. **追問（Follow-up Questions）**：針對這份大綱，讀者或審稿人可能會提出哪些重要問題？這些問題指出了大綱目前論述不夠深入或需要補強的地方。請提出 3-5 個具體追問。
-2. **概念缺口（Missing Concepts）**：目前引用的文獻缺少哪些重要概念？這些概念如果補入，能讓大綱更全面、論述更有說服力。請提出 3-5 個缺少的概念。
+Please analyze and respond with:
+1. **Follow-up Questions**: What important questions might reviewers or readers raise about this outline? Identify 3–5 specific gaps in argumentation or depth.
+2. **Missing Concepts**: What important concepts are absent from the current citations? Identify 3–5 concepts whose inclusion would make the outline more comprehensive and persuasive.
 
-以 JSON 格式回答：
+Respond in JSON format. All text values must be written in English:
 {{
     "follow_up_questions": [
-        "問題1（具體指出大綱哪個部分不足）",
-        "問題2...",
+        "Question 1 (identify which section is insufficient)",
+        "Question 2...",
         "..."
     ],
     "missing_concepts": [
         {{
-            "concept": "概念名稱（5-15字）",
-            "reason": "為什麼這個概念重要，缺少它會有什麼問題（30字以內）",
-            "suggested_section": "建議補充到哪個段落（對應上面大綱的段落描述）"
+            "concept": "Concept name (3–8 words)",
+            "reason": "Why this concept matters and what is lost without it (under 25 words)",
+            "suggested_section": "Which section of the outline this concept should be added to"
         }}
     ]
 }}
 
-只回傳 JSON，不要有其他文字。"""
+Return only the JSON, no other text."""
 
         try:
             resp1 = self.client.models.generate_content(
@@ -446,57 +446,59 @@ class WritingGuideService:
         pairs_text = ""
         for i, cp in enumerate(concept_paper_pairs, 1):
             ext_block = ""
-            for j, ext in enumerate(cp.get("external_suggestions", [])[:2], 1):
+            for j, ext in enumerate(cp.get("external_suggestions", [])[:3], 1):
                 ext_abs = (ext.get("abstract") or "")[:300]
+                ext_authors = ext.get("authors", [])
+                if ext_authors:
+                    last_name = ext_authors[0].split()[-1]
+                    author_cite = f"{last_name} et al." if len(ext_authors) > 1 else last_name
+                else:
+                    author_cite = "Anonymous"
+                ext_year = ext.get("year", "")
                 ext_block += (
                     f"   外部文獻{j}：{ext.get('title', '')} "
-                    f"({ext.get('year', '')}，{ext.get('source', '')})\n"
+                    f"（{author_cite}, {ext_year}）\n"
+                    f"   建議引用格式：({author_cite}, {ext_year})\n"
                     f"   摘要：{ext_abs}\n"
                 )
-            if cp["paper"]:
-                abstract_preview = (cp["paper"].abstract or "")[:300]
-                pairs_text += (
-                    f"{i}. 概念：{cp['concept']}\n"
-                    f"   理由：{cp['reason']}\n"
-                    f"   文獻庫論文：{cp['paper'].title}\n"
-                    f"   摘要：{abstract_preview}\n"
-                    f"{ext_block}\n"
-                )
-            else:
-                pairs_text += (
-                    f"{i}. 概念：{cp['concept']}\n"
-                    f"   理由：{cp['reason']}\n"
-                    f"   （文獻庫中暫無對應論文）\n"
-                    f"{ext_block}\n"
-                )
+            pairs_text += (
+                f"{i}. 概念：{cp['concept']}\n"
+                f"   理由：{cp['reason']}\n"
+                f"{ext_block if ext_block else '   （暫無外部文獻）'}\n"
+            )
 
-        prompt2 = f"""你是資深學術寫作顧問，請為以下每個「概念缺口」生成一段完整的學術寫作示範段落。
+        prompt2 = f"""You are a senior academic writing consultant. For each concept gap below, write a complete academic paragraph in English demonstrating how to incorporate the relevant literature.
 
-論文大綱：
+Paper outline:
 {outline_text}
 
-概念缺口與可參考文獻（含外部文獻摘要）：
+Concept gaps and available external references (with abstracts and suggested citation formats):
 {pairs_text}
 
-請依據上述可用文獻（優先參考外部文獻的摘要內容），為每個概念缺口生成：
-1. 一段 **80-150 字**的完整學術寫作示範段落，需包含 3-4 句：
-   - 第 1 句：點出此概念在學術脈絡的重要性（可帶入作者/年份）
-   - 第 2-3 句：具體說明該概念的核心方法、發現或理論，自然融入引用
-   - 第 4 句：說明此概念與本論文研究問題的關聯，承接下一段
-2. 一句說明此段落適合放在大綱哪個位置及如何銜接
+**IMPORTANT RULES**:
+- All output text must be in English.
+- In-text citations must use ONLY the "Suggested citation format" provided above, e.g. (Wang et al., 2023). Do NOT cite any other papers or fabricate author names or years.
+- If fewer than two external references are provided for a gap, cite only those available.
 
-以 JSON 格式回答：
+For each concept gap, generate:
+1. A complete academic paragraph of **80–150 words** (3–4 sentences):
+   - Sentence 1: Introduce the concept and its significance in the academic context.
+   - Sentences 2–3: Elaborate on the core methods, findings, or theory, naturally integrating parenthetical citations (only from the provided references).
+   - Sentence 4: Connect this concept to the present study's research question and bridge to the next section.
+2. A brief placement tip explaining where in the outline this paragraph belongs and how it connects.
+
+Respond in JSON format:
 {{
     "examples": [
         {{
             "index": 1,
-            "writing_example": "完整示範段落（80-150字，3-4句，展示具體學術論述方式）",
-            "placement_tip": "建議位置與銜接說明（30字以內）"
+            "writing_example": "Full academic paragraph (80–150 words, 3–4 sentences, citations only from provided references)",
+            "placement_tip": "Where this paragraph fits in the outline and how it transitions (under 20 words)"
         }}
     ]
 }}
 
-只回傳 JSON，不要有其他文字。"""
+Return only the JSON, no other text."""
 
         try:
             resp2 = self.client.models.generate_content(

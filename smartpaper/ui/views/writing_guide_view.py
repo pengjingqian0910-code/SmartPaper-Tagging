@@ -619,36 +619,6 @@ class WritingGuideView:
         # ── 缺口補強區 ────────────────────────────────────────────────
         gap_tiles = []
         for gap in enrichment.concept_gaps:
-            if gap.paper:
-                paper_row = ft.Container(
-                    content=ft.Row([
-                        ft.Icon("menu_book", size=13, color="#065F46"),
-                        ft.Text("文獻庫對應論文：", size=11, color="#065F46",
-                                weight=ft.FontWeight.W_600),
-                        ft.Text(
-                            gap.paper.title,
-                            size=11, color="#047857", expand=True,
-                        ),
-                        ft.Text(f"({gap.paper.year or '?'})", size=10, color=_C_META),
-                        ft.Container(
-                            content=ft.Text("已在文獻庫", size=9, color=ft.colors.WHITE),
-                            bgcolor="#059669", border_radius=8,
-                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
-                        ),
-                    ], spacing=6),
-                    bgcolor="#ECFDF5", border_radius=6,
-                    padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                )
-            else:
-                paper_row = ft.Container(
-                    content=ft.Row([
-                        ft.Icon("warning_amber", size=13, color="#B45309"),
-                        ft.Text("文獻庫無對應論文 — 下方外部論文建議可加入",
-                                size=11, color="#92400E"),
-                    ], spacing=6),
-                    bgcolor="#FFFBEB", border_radius=6,
-                    padding=ft.padding.symmetric(horizontal=10, vertical=5),
-                )
 
             example_ctrl = ft.Container()
             if gap.writing_example:
@@ -783,12 +753,10 @@ class WritingGuideView:
                                 size=10, color=_C_META),
                     ], spacing=8),
                     ft.Text(gap.reason, size=12, color="#374151"),
-                    # 1. 外部論文優先
+                    # 1. 外部論文（arXiv/SS 搜尋，可加入文獻庫）
                     external_ctrl,
-                    # 2. AI 生成寫作範例（基於外部論文）
+                    # 2. AI 生成寫作範例（只引用上方外部論文）
                     example_ctrl,
-                    # 3. 文獻庫對應（次要資訊）
-                    paper_row,
                 ], spacing=8),
                 padding=12, border=ft.border.all(1, border_c),
                 border_radius=8, bgcolor="#FFFFFF",
@@ -803,7 +771,7 @@ class WritingGuideView:
                             color="#5B21B6"),
                     _chip(f"{len(enrichment.concept_gaps)} 個", color),
                 ], spacing=8),
-                ft.Text("每個缺口依序呈現：外部高相關論文（可加入文獻庫）→ AI 根據外部文獻生成完整寫作範例 → 文獻庫現有對應論文",
+                ft.Text("外部高相關論文（arXiv/SS）→ AI 根據外部文獻生成完整寫作範例（括號引用僅來自上方論文）→ 可一鍵加入文獻庫",
                         size=11, color=_C_META),
                 *gap_tiles,
             ], spacing=10)
