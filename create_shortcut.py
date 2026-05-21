@@ -11,7 +11,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 PYTHON_EXE  = Path(sys.executable)
 PYTHONW_EXE = PYTHON_EXE.parent / "pythonw.exe"   # 無主控台視窗
-LAUNCHER_PY = PROJECT_DIR / "launcher.py"   # 啟動動畫入口
+LAUNCHER_PY = PROJECT_DIR / "setup_and_run.py"  # 安裝 + 啟動入口
 ICON_PATH   = PROJECT_DIR / "assets" / "icon.ico"
 
 
