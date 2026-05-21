@@ -1,14 +1,16 @@
 """
-知識圖譜視圖（重新設計版）
-- 年份趨勢圖（漸層色條）
-- 標籤分布圖（同調色盤 + 百分比）
-- 統計卡片（新增「唯一標籤數」第 4 張）
-- 知識圖譜生成（color_by / layout 下拉選單）
-- BibTeX / RIS 匯出
-- 論文去重
+知識圖譜視圖 v3 — 全面升級
+新增：
+- X 軸年份標籤修正（無旋轉、步距自適應、固定高度錨點）
+- 標籤共現分析（Co-occurrence）Top-5 橫條圖
+- 演進趨勢面板（Canvas 折線圖，前 3 大標籤 10 年消長）
+- 新興 / 經典主題自動識別（🔥 Emerging / 🏛 Classic 徽章）
+- 右側三模式面板：年份分布 ↔ 共現標籤 ↔ 演進趨勢
 """
 
+import math
 import flet as ft
+import flet.canvas as fc
 from pathlib import Path
 from typing import Optional
 from collections import Counter, defaultdict
@@ -27,8 +29,9 @@ TEXT_H   = "#1E293B"
 TEXT_M   = "#475569"
 TEXT_S   = "#94A3B8"
 BAR_SEL  = "#F59E0B"
+EMERGING_COLOR = "#EA580C"   # orange
+CLASSIC_COLOR  = "#3B82F6"   # blue
 
-# Mirror of _PALETTE in knowledge_graph.py — used for tag bar colours
 _TAG_PALETTE = [
     "#6366f1", "#f28e2b", "#e15759", "#76b7b2",
     "#59a14f", "#edc948", "#b07aa1", "#ff9da7",
@@ -37,7 +40,6 @@ _TAG_PALETTE = [
 
 
 def _lerp_hex(c1: str, c2: str, t: float) -> str:
-    """Linear interpolate between two hex colours."""
     def parse(c):
         c = c.lstrip("#")
         return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
@@ -50,14 +52,12 @@ def _lerp_hex(c1: str, c2: str, t: float) -> str:
 
 
 def _year_bar_color(year: int, min_y: int, max_y: int) -> str:
-    """Cool blue (old) → warm amber (recent)."""
     span = max(max_y - min_y, 1)
     t = (year - min_y) / span
     return _lerp_hex("#60a5fa", "#f59e0b", t)
 
 
 def _section(title: str, icon: str, children: list, color=ACCENT) -> ft.Container:
-    """統一 section 卡片樣式"""
     return ft.Container(
         content=ft.Column([
             ft.Row([
@@ -78,10 +78,22 @@ class GraphView:
         self.page = page
         self._papers = []
         self._selected_tag: Optional[str] = None
-        # chart refs
+        self._right_mode: str = "year"   # "year" | "cooccur" | "trend"
+
+        # Chart refs
         self._tag_bars: list[ft.Container] = []
-        self._tag_year_chart: Optional[ft.Column] = None
-        self._selected_tag_label: Optional[ft.Text] = None
+        self._right_content: Optional[ft.Column] = None
+        self._right_header: Optional[ft.Column] = None
+        self._mode_btn_containers: dict[str, ft.Container] = {}
+
+        # Precomputed
+        self._cooccur: dict[str, Counter] = {}
+        self._tag_year: dict[str, Counter] = {}
+        self._tag_counts: Counter = Counter()
+        self._tag_class: dict[str, str] = {}   # "emerging" | "classic" | "normal"
+        self._tag_stats: dict[str, dict] = {}
+
+    # ── Build ──────────────────────────────────────────────────────────
 
     def build(self) -> ft.Control:
         try:
@@ -106,8 +118,8 @@ class GraphView:
         self.db = SQLiteDB()
 
         self._papers = list(self.db.get_all(limit=5000))
+        self._precompute()
 
-        # File pickers
         self.bibtex_picker = ft.FilePicker()
         self.bibtex_picker.on_result = self._on_bibtex_save
         self.ris_picker = ft.FilePicker()
@@ -120,59 +132,106 @@ class GraphView:
         stats = self.kg_service.get_graph_stats()
 
         return ft.Column([
-            # 標題
             ft.Text("知識圖譜與工具", size=26, weight=ft.FontWeight.BOLD, color=TEXT_H),
             ft.Text("視覺化論文關聯，分析標籤分布，匯出引用格式", size=13, color=TEXT_M),
             ft.Divider(height=4, color=BORDER),
-
-            # 統計卡片
             self._build_stats(stats),
-
-            # 年份趨勢
             self._build_year_trend(stats),
-
-            # 標籤分布 + 標籤年份互動
             self._build_tag_analysis(),
-
-            # 知識圖譜
             self._build_graph_section(),
-
-            # 匯出
             self._build_export_section(),
-
-            # 去重
             self._build_dedup_section(),
-
             ft.Row([self.progress, self.status], spacing=8),
         ], spacing=14, scroll=ft.ScrollMode.AUTO, expand=True)
+
+    # ── Precompute ────────────────────────────────────────────────────
+
+    def _precompute(self):
+        """計算共現矩陣、標籤年份分布、新興/經典分類。"""
+        papers = self._papers
+
+        for p in papers:
+            for t in (p.tags or []):
+                self._tag_counts[t] += 1
+                if p.year:
+                    self._tag_year.setdefault(t, Counter())[p.year] += 1
+
+        # Co-occurrence
+        for p in papers:
+            tags = list(set(p.tags or []))
+            for t in tags:
+                if t not in self._cooccur:
+                    self._cooccur[t] = Counter()
+                for other in tags:
+                    if other != t:
+                        self._cooccur[t][other] += 1
+
+        # Global year range
+        all_years = [p.year for p in papers if p.year]
+        if not all_years:
+            return
+        global_min_y = min(all_years)
+        global_max_y = max(all_years)
+        recent_thr = global_max_y - 2
+
+        for tag, year_dist in self._tag_year.items():
+            total = sum(year_dist.values())
+            if total < 2:
+                self._tag_class[tag] = "normal"
+                continue
+
+            mean_y = sum(y * c for y, c in year_dist.items()) / total
+            recent = sum(c for y, c in year_dist.items() if y >= recent_thr)
+            recent_ratio = recent / total
+
+            last2 = sum(year_dist.get(y, 0) for y in [global_max_y, global_max_y - 1])
+            prev2 = sum(year_dist.get(y, 0) for y in [global_max_y - 2, global_max_y - 3])
+            growth = (last2 - prev2) / max(prev2, 1)
+
+            if (recent_ratio >= 0.45 and total >= 3) or growth >= 0.5:
+                cls = "emerging"
+            elif mean_y <= (global_min_y + 5) and recent > 0 and total >= 3:
+                cls = "classic"
+            else:
+                cls = "normal"
+
+            self._tag_class[tag] = cls
+            self._tag_stats[tag] = {
+                "mean_year": round(mean_y, 1),
+                "recent_pct": round(recent_ratio * 100, 1),
+                "growth_pct": round(growth * 100, 1),
+                "total": total,
+            }
 
     # ── 統計卡片 ──────────────────────────────────────────────────────
 
     def _build_stats(self, stats: dict) -> ft.Row:
-        # Compute unique tag count
         unique_tags = len({t for p in self._papers for t in (p.tags or [])})
+        emerging_n = sum(1 for v in self._tag_class.values() if v == "emerging")
+        classic_n  = sum(1 for v in self._tag_class.values() if v == "classic")
 
         def card(label, value, color, bg):
             return ft.Container(
                 content=ft.Column([
-                    ft.Text(str(value), size=28, weight=ft.FontWeight.BOLD, color=color),
-                    ft.Text(label, size=11, color=TEXT_S),
+                    ft.Text(str(value), size=26, weight=ft.FontWeight.BOLD, color=color),
+                    ft.Text(label, size=10, color=TEXT_S),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2),
-                padding=ft.padding.symmetric(horizontal=20, vertical=14),
+                padding=ft.padding.symmetric(horizontal=16, vertical=12),
                 border=ft.border.all(1, BORDER),
                 border_radius=10,
                 bgcolor=bg,
-                width=140,
+                width=130,
             )
 
         return ft.Row([
-            card("論文總數", stats.get("total_papers", 0), ACCENT, "#EEF2FF"),
-            card("有引用資料", stats.get("with_citations", 0), TEAL, "#F0FDFA"),
-            card("有概念索引", stats.get("with_concepts", 0), "#7C3AED", "#F5F3FF"),
-            card("唯一標籤數", unique_tags, ORANGE, "#FFFBEB"),
-        ], spacing=12)
+            card("論文總數",   stats.get("total_papers", 0), ACCENT,  "#EEF2FF"),
+            card("有引用資料", stats.get("with_citations", 0), TEAL,   "#F0FDFA"),
+            card("唯一標籤數", unique_tags,                   ORANGE,  "#FFFBEB"),
+            card("🔥 新興主題", emerging_n,                   EMERGING_COLOR, "#FFF7ED"),
+            card("🏛 經典主題", classic_n,                    CLASSIC_COLOR,  "#EFF6FF"),
+        ], spacing=10, wrap=True)
 
-    # ── 年份趨勢圖 ────────────────────────────────────────────────────
+    # ── 年份趨勢圖（修正版：無旋轉、步距跳躍、固定錨點）────────────
 
     def _build_year_trend(self, stats: dict) -> ft.Container:
         year_dist = stats.get("year_distribution", {})
@@ -182,33 +241,51 @@ class GraphView:
                 padding=12,
             )
 
-        max_count = max(year_dist.values(), default=1)
-        max_h = 120
         sorted_years = sorted(year_dist.keys())
-        min_y, max_y = sorted_years[0], sorted_years[-1]
+        n = len(sorted_years)
+        max_count = max(year_dist.values(), default=1)
+        max_h = 100
+        min_y, max_y_val = sorted_years[0], sorted_years[-1]
+
+        # ★ 最多顯示 10 個標籤，避免密集
+        step = max(1, math.ceil(n / 10))
 
         bars = []
-        for year in sorted_years:
+        for i, year in enumerate(sorted_years):
             count = year_dist[year]
             bar_h = max(4, int(count / max_count * max_h))
-            bar_color = _year_bar_color(year, min_y, max_y)
+            bar_color = _year_bar_color(year, min_y, max_y_val)
+            show_label = (i % step == 0) or (i == n - 1)
+
             bars.append(ft.Column([
+                # 數量標籤
                 ft.Text(str(count), size=9, color=TEXT_M),
+                # 柱體
                 ft.Container(
-                    width=32, height=bar_h, bgcolor=bar_color,
+                    width=28, height=bar_h, bgcolor=bar_color,
                     border_radius=ft.border_radius.only(top_left=4, top_right=4),
+                    tooltip=f"{year}：{count} 篇",
                 ),
-                ft.Text(str(year), size=9, color=TEXT_S, rotate=ft.Rotate(0.5)),
+                # ★ 固定高度標籤區（不旋轉 → 無錨點偏移）
+                ft.Container(
+                    width=28, height=22,
+                    content=ft.Text(
+                        str(year) if show_label else "",
+                        size=8, color=TEXT_S,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    alignment=ft.alignment.top_center,
+                ),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2))
 
         return _section("論文發表年份趨勢", "bar_chart", [
             ft.Container(
-                content=ft.Row(bars, spacing=4, scroll=ft.ScrollMode.AUTO),
-                padding=ft.padding.only(top=8),
+                content=ft.Row(bars, spacing=3, scroll=ft.ScrollMode.AUTO),
+                padding=ft.padding.only(top=8, bottom=4),
             ),
         ])
 
-    # ── 標籤分析（分布 + 年份互動）────────────────────────────────────
+    # ── 標籤分析（三模式右面板）──────────────────────────────────────
 
     def _build_tag_analysis(self) -> ft.Container:
         tag_counter: Counter = Counter()
@@ -225,53 +302,106 @@ class GraphView:
         max_count = top_tags[0][1]
         total_count = sum(c for _, c in top_tags)
 
-        # 計算每個 tag 的年份分布
-        tag_year: dict[str, Counter] = defaultdict(Counter)
-        for p in self._papers:
-            if p.year:
-                for t in (p.tags or []):
-                    tag_year[t][p.year] += 1
+        # ── 右側面板的模式切換按鈕 ───────────────────────────────────
+        def _make_mode_btn(label: str, mode: str) -> ft.Container:
+            def on_click(e, m=mode):
+                self._set_right_mode(m)
 
-        self._selected_tag_label = ft.Text("← 點擊左側標籤查看其年份分布",
-                                           size=12, color=TEXT_S, italic=True)
-        self._tag_year_chart = ft.Column([self._selected_tag_label], spacing=6)
+            c = ft.Container(
+                content=ft.Text(label, size=11,
+                                weight=ft.FontWeight.W_600 if mode == self._right_mode else ft.FontWeight.NORMAL),
+                padding=ft.padding.symmetric(horizontal=10, vertical=5),
+                border_radius=6,
+                bgcolor=ACCENT if mode == self._right_mode else BG,
+                border=ft.border.all(1, ACCENT if mode == self._right_mode else BORDER),
+                on_click=on_click,
+                ink=True,
+            )
+            self._mode_btn_containers[mode] = c
+            return c
+
+        mode_row = ft.Row([
+            _make_mode_btn("📅 年份分布", "year"),
+            _make_mode_btn("🔗 共現標籤", "cooccur"),
+            _make_mode_btn("📈 演進趨勢", "trend"),
+        ], spacing=6)
+
+        # ── 右側面板 header（顯示選中標籤的統計）────────────────────
+        self._right_header = ft.Column(
+            [ft.Text("← 點擊左側標籤開始分析", size=12, color=TEXT_S, italic=True)],
+            spacing=4,
+        )
+
+        # ── 右側面板 content ─────────────────────────────────────────
+        self._right_content = ft.Column(
+            [ft.Text("請先選擇左側標籤，或切至「演進趨勢」查看整體", size=11, color=TEXT_S, italic=True)],
+            spacing=6,
+        )
+        if self._right_mode == "trend":
+            self._right_content.controls = [self._build_trend_panel()]
+
+        self._right_panel = ft.Column([
+            mode_row,
+            ft.Divider(height=1, color=BORDER),
+            self._right_header,
+            ft.Container(
+                content=self._right_content,
+                border=ft.border.all(1, BORDER),
+                border_radius=8,
+                padding=10,
+                bgcolor=BG,
+            ),
+        ], spacing=8)
+
+        # ── 左側標籤條 ───────────────────────────────────────────────
+        bar_w_max = 160
 
         def make_bar(tag, count, idx):
-            bar_w_max = 180
             bar_color = _TAG_PALETTE[idx % len(_TAG_PALETTE)]
             pct = count / total_count * 100 if total_count else 0
+            cls = self._tag_class.get(tag, "normal")
+            badge = "🔥" if cls == "emerging" else ("🏛" if cls == "classic" else "")
 
             def on_click(e, t=tag):
-                self._on_tag_click(t, tag_year.get(t, {}))
+                self._on_tag_click(t, self._tag_year.get(t, {}))
 
             bar = ft.Container(
                 content=ft.Row([
                     ft.Container(
-                        content=ft.Text(tag, size=11, color=TEXT_M,
-                                        overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-                        width=130,
+                        content=ft.Row([
+                            ft.Text(badge, size=10) if badge else ft.Container(width=14),
+                            ft.Text(tag, size=11, color=TEXT_M,
+                                    overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+                        ], spacing=2),
+                        width=136,
                     ),
                     ft.Container(
                         width=int(count / max_count * bar_w_max),
-                        height=16,
-                        bgcolor=bar_color,
-                        border_radius=3,
+                        height=16, bgcolor=bar_color, border_radius=3,
                     ),
                     ft.Text(f"{count} ({pct:.1f}%)", size=11, color=TEXT_M),
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                padding=ft.padding.symmetric(vertical=4, horizontal=8),
+                padding=ft.padding.symmetric(vertical=4, horizontal=6),
                 border_radius=6,
                 on_click=on_click,
-                tooltip=f"點擊查看「{tag}」的年份分布",
+                tooltip=f"點擊分析「{tag}」{' (' + cls + ')' if cls != 'normal' else ''}",
+                ink=True,
             )
             return bar
 
         self._tag_bars = [make_bar(tag, count, i) for i, (tag, count) in enumerate(top_tags)]
         bar_col = ft.Column(self._tag_bars, spacing=2)
 
+        # ── 圖例說明 ─────────────────────────────────────────────────
+        legend_row = ft.Row([
+            ft.Text("🔥 新興主題", size=10, color=EMERGING_COLOR),
+            ft.Text("｜", size=10, color=TEXT_S),
+            ft.Text("🏛 經典主題", size=10, color=CLASSIC_COLOR),
+            ft.Text("｜ 點擊標籤查看詳細分析", size=10, color=TEXT_S),
+        ], spacing=4)
+
         return _section("標籤分析", "label", [
-            ft.Text("左：前 25 個標籤出現次數　右：點擊標籤查看年份分布",
-                    size=11, color=TEXT_S),
+            legend_row,
             ft.Row([
                 ft.Container(
                     content=ft.Column([bar_col], scroll=ft.ScrollMode.AUTO),
@@ -282,57 +412,299 @@ class GraphView:
                     bgcolor=BG,
                 ),
                 ft.Container(
-                    content=self._tag_year_chart,
+                    content=self._right_panel,
                     expand=3,
                     border=ft.border.all(1, BORDER),
                     border_radius=8,
-                    padding=14,
+                    padding=12,
                     bgcolor=CARD,
                 ),
             ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
         ], color=TEAL)
 
+    # ── 右側面板：切換模式 ────────────────────────────────────────────
+
+    def _set_right_mode(self, mode: str):
+        self._right_mode = mode
+
+        # Update button styles
+        for m, container in self._mode_btn_containers.items():
+            is_active = (m == mode)
+            container.bgcolor = ACCENT if is_active else BG
+            container.border = ft.border.all(1, ACCENT if is_active else BORDER)
+            lbl = container.content
+            lbl.weight = ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL
+
+        # Refresh right panel content
+        self._refresh_right_panel()
+        self.page.update()
+
+    def _refresh_right_panel(self):
+        if self._right_mode == "trend":
+            self._right_content.controls = [self._build_trend_panel()]
+        elif self._selected_tag:
+            year_dist = self._tag_year.get(self._selected_tag, {})
+            if self._right_mode == "year":
+                self._right_content.controls = [self._build_year_dist_panel(self._selected_tag, year_dist)]
+            else:
+                self._right_content.controls = [self._build_cooccur_panel(self._selected_tag)]
+        else:
+            self._right_content.controls = [
+                ft.Text("請先選擇左側標籤", size=11, color=TEXT_S, italic=True)
+            ]
+
+    # ── 點擊標籤 ─────────────────────────────────────────────────────
+
     def _on_tag_click(self, tag: str, year_dist: Counter):
         self._selected_tag = tag
 
+        # Update header
+        stats = self._tag_stats.get(tag, {})
+        cls = self._tag_class.get(tag, "normal")
+        badge = "🔥 新興主題" if cls == "emerging" else ("🏛 經典主題" if cls == "classic" else "")
+        badge_color = EMERGING_COLOR if cls == "emerging" else (CLASSIC_COLOR if cls == "classic" else TEXT_M)
+
+        header_rows = [
+            ft.Row([
+                ft.Text(f"📌 {tag}", size=13, weight=ft.FontWeight.W_600, color=TEXT_H),
+                ft.Text(badge, size=11, color=badge_color,
+                        weight=ft.FontWeight.W_600) if badge else ft.Container(),
+            ], spacing=8),
+        ]
+        if stats:
+            header_rows.append(
+                ft.Row([
+                    ft.Text(f"均值年份 {stats['mean_year']}", size=10, color=TEXT_S),
+                    ft.Text("｜", size=10, color=BORDER),
+                    ft.Text(f"近年佔比 {stats['recent_pct']}%", size=10, color=TEXT_S),
+                    ft.Text("｜", size=10, color=BORDER),
+                    ft.Text(f"成長率 {'+' if stats['growth_pct'] >= 0 else ''}{stats['growth_pct']}%",
+                            size=10,
+                            color=GREEN if stats['growth_pct'] > 0 else ROSE),
+                ], spacing=4, wrap=True)
+            )
+        self._right_header.controls = header_rows
+
+        # Update content
+        self._refresh_right_panel()
+        self.page.update()
+
+    # ── 右側面板：年份分布 ────────────────────────────────────────────
+
+    def _build_year_dist_panel(self, tag: str, year_dist: Counter) -> ft.Control:
         if not year_dist:
-            self._tag_year_chart.controls = [
-                ft.Text(f"「{tag}」沒有年份資料", size=12, color=TEXT_S, italic=True),
-            ]
-            self.page.update()
-            return
+            return ft.Text(f"「{tag}」沒有年份資料", size=12, color=TEXT_S, italic=True)
 
         min_year = min(year_dist.keys())
         max_year = max(year_dist.keys())
         full_dist = {y: year_dist.get(y, 0) for y in range(min_year, max_year + 1)}
 
         max_c = max(full_dist.values(), default=1)
-        max_h = 80
+        max_h = 75
+        n = len(full_dist)
+        step = max(1, math.ceil(n / 8))
 
         bars = []
-        for year in sorted(full_dist.keys()):
+        for i, year in enumerate(sorted(full_dist.keys())):
             cnt = full_dist[year]
             h = max(2, int(cnt / max_c * max_h)) if cnt > 0 else 2
             bar_color = BAR_SEL if cnt > 0 else "#E2E8F0"
-            count_label = str(cnt) if cnt > 0 else ""
+            show_label = (i % step == 0) or (i == n - 1)
             bars.append(ft.Column([
-                ft.Text(count_label, size=9, color=TEXT_M),
+                ft.Text(str(cnt) if cnt > 0 else "", size=9, color=TEXT_M),
                 ft.Container(width=22, height=h, bgcolor=bar_color,
                              border_radius=ft.border_radius.only(top_left=3, top_right=3)),
-                ft.Text(str(year), size=8, color=TEXT_S, rotate=ft.Rotate(0.5)),
+                ft.Container(
+                    width=22, height=20,
+                    content=ft.Text(str(year) if show_label else "", size=8, color=TEXT_S,
+                                    text_align=ft.TextAlign.CENTER),
+                    alignment=ft.alignment.top_center,
+                ),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2))
 
         total = sum(year_dist.values())
         span = max_year - min_year + 1
-        self._tag_year_chart.controls = [
-            ft.Text(f"「{tag}」年份分布（共 {total} 篇，{min_year}–{max_year}，{span} 年）",
-                    size=13, weight=ft.FontWeight.W_600, color=TEXT_H),
+        return ft.Column([
+            ft.Text(f"「{tag}」年份分布（共 {total} 篇，{min_year}–{max_year}）",
+                    size=12, weight=ft.FontWeight.W_600, color=TEXT_H),
             ft.Container(
                 content=ft.Row(bars, spacing=3, scroll=ft.ScrollMode.AUTO),
-                padding=ft.padding.only(top=8),
+                padding=ft.padding.only(top=6),
             ),
-        ]
-        self.page.update()
+        ], spacing=6)
+
+    # ── 右側面板：共現標籤 ────────────────────────────────────────────
+
+    def _build_cooccur_panel(self, tag: str) -> ft.Control:
+        co = self._cooccur.get(tag, Counter())
+        if not co:
+            return ft.Text(f"「{tag}」沒有共現標籤資料", size=12, color=TEXT_S, italic=True)
+
+        papers_with_tag = sum(1 for p in self._papers if tag in (p.tags or []))
+        top5 = co.most_common(5)
+        max_co = top5[0][1] if top5 else 1
+        bar_w_max = 140
+
+        rows = []
+        for i, (other_tag, count) in enumerate(top5):
+            pct = count / papers_with_tag * 100 if papers_with_tag else 0
+            bar_color = _TAG_PALETTE[i % len(_TAG_PALETTE)]
+            rows.append(ft.Row([
+                ft.Container(
+                    content=ft.Text(other_tag, size=11, color=TEXT_M,
+                                    overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+                    width=110,
+                ),
+                ft.Container(
+                    width=int(count / max_co * bar_w_max),
+                    height=14, bgcolor=bar_color, border_radius=3,
+                ),
+                ft.Text(f"{count} ({pct:.0f}%)", size=10, color=TEXT_S),
+            ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER))
+
+        return ft.Column([
+            ft.Text(f"「{tag}」最常共現的標籤 Top-5",
+                    size=12, weight=ft.FontWeight.W_600, color=TEXT_H),
+            ft.Text(f"（基於 {papers_with_tag} 篇含此標籤的論文）",
+                    size=10, color=TEXT_S),
+            ft.Column(rows, spacing=6),
+        ], spacing=8)
+
+    # ── 右側面板：演進趨勢（Canvas 折線圖）───────────────────────────
+
+    def _build_trend_panel(self) -> ft.Control:
+        if not self._tag_year:
+            return ft.Text("尚無年份資料", size=12, color=TEXT_S, italic=True)
+
+        top3 = self._tag_counts.most_common(3)
+        if not top3:
+            return ft.Text("尚無標籤資料", size=12, color=TEXT_S, italic=True)
+
+        line_colors = ["#6366f1", "#f28e2b", "#e15759"]
+
+        # 近 10 年範圍
+        all_ys: set[int] = set()
+        for tag, _ in top3:
+            all_ys.update(self._tag_year.get(tag, {}).keys())
+        if not all_ys:
+            return ft.Text("無年份資料", size=12, color=TEXT_S)
+
+        max_yr = max(all_ys)
+        min_yr_range = max(max_yr - 9, min(all_ys))
+        years = list(range(min_yr_range, max_yr + 1))
+        n_years = len(years)
+
+        # Max count across all tags + years
+        all_counts = [self._tag_year.get(t, {}).get(y, 0) for t, _ in top3 for y in years]
+        max_cnt = max(all_counts) if all_counts else 1
+
+        # Canvas dimensions
+        CW, CH = 340, 110
+        pad_l, pad_r, pad_t, pad_b = 8, 8, 6, 20
+
+        def x_of(i: int) -> float:
+            span = max(n_years - 1, 1)
+            return pad_l + (CW - pad_l - pad_r) * i / span
+
+        def y_of(cnt: int) -> float:
+            h = CH - pad_t - pad_b
+            return pad_t + h * (1 - cnt / max_cnt)
+
+        shapes = []
+
+        # Grid lines (horizontal)
+        for frac in [0.25, 0.5, 0.75, 1.0]:
+            gy = pad_t + (CH - pad_t - pad_b) * (1 - frac)
+            shapes.append(fc.Line(
+                x1=pad_l, y1=gy, x2=CW - pad_r, y2=gy,
+                paint=ft.Paint(color="#E2E8F020", stroke_width=1),
+            ))
+
+        # Trend lines + dots per tag
+        for (tag, _), color in zip(top3, line_colors):
+            dist = self._tag_year.get(tag, {})
+            pts = [(x_of(i), y_of(dist.get(y, 0))) for i, y in enumerate(years)]
+
+            # Polyline
+            for k in range(len(pts) - 1):
+                shapes.append(fc.Line(
+                    x1=pts[k][0], y1=pts[k][1],
+                    x2=pts[k + 1][0], y2=pts[k + 1][1],
+                    paint=ft.Paint(color=color, stroke_width=2.0),
+                ))
+
+            # Dots
+            for i, (px, py) in enumerate(pts):
+                cnt = dist.get(years[i], 0)
+                if cnt > 0:
+                    shapes.append(fc.Circle(
+                        px, py, 3.5,
+                        paint=ft.Paint(color=color, style=ft.PaintingStyle.FILL),
+                    ))
+
+        canvas = fc.Canvas(shapes, width=CW, height=CH, expand=True)
+
+        # X-axis year labels (step to avoid crowding)
+        step = max(1, math.ceil(n_years / 8))
+        x_labels = ft.Row(
+            [
+                ft.Container(
+                    content=ft.Text(str(years[i]) if i % step == 0 or i == n_years - 1 else "",
+                                    size=8, color=TEXT_S, text_align=ft.TextAlign.CENTER),
+                    width=(CW - pad_l - pad_r) / max(n_years - 1, 1) if n_years > 1 else CW,
+                    alignment=ft.alignment.center,
+                )
+                for i in range(n_years)
+            ],
+            spacing=0,
+        )
+
+        # Legend
+        legend = ft.Row([
+            ft.Row([
+                ft.Container(
+                    width=18, height=3, bgcolor=color,
+                    border_radius=2,
+                ),
+                ft.Text(tag[:18] + ("…" if len(tag) > 18 else ""), size=10, color=TEXT_M),
+            ], spacing=5)
+            for (tag, _), color in zip(top3, line_colors)
+        ], spacing=12, wrap=True)
+
+        # Emerging / classic annotation
+        annotations = []
+        for tag, _ in top3:
+            cls = self._tag_class.get(tag, "normal")
+            st = self._tag_stats.get(tag, {})
+            if cls == "emerging":
+                annotations.append(
+                    ft.Text(f"🔥 {tag[:16]}：近年佔比 {st.get('recent_pct', '?')}%，成長 +{st.get('growth_pct', '?')}%",
+                            size=10, color=EMERGING_COLOR)
+                )
+            elif cls == "classic":
+                annotations.append(
+                    ft.Text(f"🏛 {tag[:16]}：均值年份 {st.get('mean_year', '?')}，歷史基石",
+                            size=10, color=CLASSIC_COLOR)
+                )
+
+        anno_col = ft.Column(annotations, spacing=3) if annotations else ft.Container()
+
+        return ft.Column([
+            ft.Text("前三大標籤演進趨勢（近 10 年）",
+                    size=12, weight=ft.FontWeight.W_600, color=TEXT_H),
+            ft.Stack([
+                ft.Container(
+                    width=CW, height=CH,
+                    bgcolor="#F8FAFC",
+                    border=ft.border.all(1, BORDER),
+                    border_radius=6,
+                ),
+                canvas,
+            ]),
+            ft.Container(content=x_labels, padding=ft.padding.only(left=pad_l)),
+            legend,
+            anno_col,
+        ], spacing=6)
 
     # ── 知識圖譜生成 ──────────────────────────────────────────────────
 
@@ -376,7 +748,6 @@ class GraphView:
             self._update_graph_count()
             self.page.update()
 
-        # 圖譜設定
         self.graph_type = ft.RadioGroup(
             content=ft.Row([
                 ft.Radio(value="tag",      label="共享標籤 ★"),
@@ -413,10 +784,8 @@ class GraphView:
         )
 
         return _section("知識圖譜視覺化（互動）", "bubble_chart", [
-            ft.Text(
-                "勾選要分析的論文，點擊節點可高亮其關聯論文，支援拖拽 / 縮放",
-                size=11, color=TEXT_S,
-            ),
+            ft.Text("勾選要分析的論文，點擊節點可高亮其關聯論文，支援拖拽 / 縮放",
+                    size=11, color=TEXT_S),
             ft.Row([
                 self._graph_search,
                 ft.TextButton("全選", on_click=_sel_all),
@@ -430,18 +799,11 @@ class GraphView:
                 padding=8,
                 bgcolor=BG,
             ),
-            ft.Row([
-                self.graph_type,
-                self.min_shared_dd,
-            ], spacing=10, wrap=True),
-            ft.Row([
-                self.color_by_dd,
-                self.layout_dd,
-                gen_btn,
-            ], spacing=10, wrap=True),
+            ft.Row([self.graph_type, self.min_shared_dd], spacing=10, wrap=True),
+            ft.Row([self.color_by_dd, self.layout_dd, gen_btn], spacing=10, wrap=True),
             ft.Text(
-                "節點大小∝引用數　顏色可選標籤/年份/引用數　邊=共享關聯\n"
-                "互動操作：滾輪縮放 · 拖拽節點 · 單擊高亮鄰居 · 雙擊還原 · Esc 重置",
+                "節點大小∝度中心性　顏色可選標籤/年份/引用數　邊=共享關聯\n"
+                "互動操作：滾輪縮放 · 拖拽節點 · 單擊高亮鄰居 · 圖例點擊閃爍 · Esc 重置",
                 size=10, color=TEXT_S,
             ),
         ])
@@ -495,8 +857,7 @@ class GraphView:
                     size=11, color=TEXT_S),
             ft.Row([
                 ft.ElevatedButton(
-                    "匯出 BibTeX (.bib)",
-                    icon="code",
+                    "匯出 BibTeX (.bib)", icon="code",
                     on_click=lambda e: self.bibtex_picker.save_file(
                         allowed_extensions=["bib"], file_name="papers.bib",
                         dialog_title="儲存 BibTeX 檔案",
@@ -504,8 +865,7 @@ class GraphView:
                     style=ft.ButtonStyle(bgcolor="#166534", color="#FFFFFF"),
                 ),
                 ft.ElevatedButton(
-                    "匯出 RIS (.ris)",
-                    icon="code",
+                    "匯出 RIS (.ris)", icon="code",
                     on_click=lambda e: self.ris_picker.save_file(
                         allowed_extensions=["ris"], file_name="papers.ris",
                         dialog_title="儲存 RIS 檔案",
