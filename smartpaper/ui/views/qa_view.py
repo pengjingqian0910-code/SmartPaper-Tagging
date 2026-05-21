@@ -243,7 +243,18 @@ class QAView:
             active_color="#7C3AED",
             label_style=ft.TextStyle(size=11, color="#7C3AED"),
             on_change=self._on_fc_toggle,
-            tooltip="啟用後由 Gemini 自主決定要搜尋什麼、讀取哪些論文（更靈活但較慢）",
+        )
+
+        # ℹ️ 模式說明面板（預設隱藏，點 info 按鈕切換）
+        self._mode_info_panel = self._build_mode_info_panel()
+        self._mode_info_panel.visible = False
+
+        info_btn = ft.IconButton(
+            icon=ft.icons.INFO_OUTLINE,
+            icon_color="#7C3AED",
+            icon_size=18,
+            tooltip="查看兩種模式的差異說明",
+            on_click=self._on_toggle_mode_info,
         )
 
         return ft.Column([
@@ -253,9 +264,11 @@ class QAView:
                     ft.Text("根據論文庫回答問題，有全文的論文提供章節級引用",
                             size=11, color=ft.colors.GREY_600),
                 ], spacing=2, expand=True),
-                self._fc_switch,
+                ft.Row([self._fc_switch, info_btn], spacing=0,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self._mode_info_panel,
             ft.Divider(height=1, color=COLOR_BORDER),
             ft.Row([left_col, right_col], expand=True, spacing=0,
                    vertical_alignment=ft.CrossAxisAlignment.START),
@@ -878,11 +891,95 @@ class QAView:
         if e is not None:
             self.page.update()
 
+    def _build_mode_info_panel(self) -> ft.Container:
+        def _row(icon, color, label, desc):
+            return ft.Row([
+                ft.Icon(icon, color=color, size=16),
+                ft.Column([
+                    ft.Text(label, size=12, weight=ft.FontWeight.W_600, color=color),
+                    ft.Text(desc, size=11, color="#374151"),
+                ], spacing=2, expand=True),
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
+
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon("compare_arrows", color="#1D4ED8", size=16),
+                    ft.Text("兩種問答模式說明", size=13, weight=ft.FontWeight.W_600,
+                            color="#1D4ED8"),
+                    ft.Container(expand=True),
+                    ft.IconButton(
+                        icon="close", icon_size=14, icon_color="#9CA3AF",
+                        tooltip="關閉",
+                        on_click=self._on_toggle_mode_info,
+                    ),
+                ], spacing=6),
+                ft.Divider(height=4, color="#DBEAFE"),
+                ft.Row([
+                    ft.Container(
+                        content=ft.Column([
+                            _row("search", "#1565C0", "Classic RAG",
+                                 "直接向量搜尋最相似段落，速度快，適合精準引用查詢"),
+                            ft.Container(height=4),
+                            ft.Text("優點：速度快、引用來源明確", size=10, color="#6B7280"),
+                            ft.Text("適合：「這篇論文提到什麼方法？」", size=10, color="#6B7280"),
+                        ], spacing=4),
+                        expand=True,
+                        bgcolor="#EFF6FF",
+                        border=ft.border.all(1, "#BFDBFE"),
+                        border_radius=8,
+                        padding=10,
+                    ),
+                    ft.Container(
+                        content=ft.Column([
+                            _row("smart_toy", "#7C3AED", "Function Calling",
+                                 "AI 自主決定呼叫哪些工具，可跨多篇論文整合分析"),
+                            ft.Container(height=4),
+                            ft.Text("優點：推理更靈活、可比較多篇", size=10, color="#6B7280"),
+                            ft.Text("適合：「比較這幾篇論文的研究方法」", size=10, color="#6B7280"),
+                        ], spacing=4),
+                        expand=True,
+                        bgcolor="#F5F3FF",
+                        border=ft.border.all(1, "#DDD6FE"),
+                        border_radius=8,
+                        padding=10,
+                    ),
+                ], spacing=8),
+            ], spacing=8),
+            bgcolor="#FFFFFF",
+            border=ft.border.all(1, "#DBEAFE"),
+            border_radius=10,
+            padding=12,
+        )
+
+    def _on_toggle_mode_info(self, e):
+        self._mode_info_panel.visible = not self._mode_info_panel.visible
+        self.page.update()
+
     def _on_fc_toggle(self, e):
         self._use_fc = e.control.value
         mode = "Function Calling" if self._use_fc else "Classic RAG"
         self._fc_switch.label = f"{mode} 模式"
         self._fc_switch.update()
+        # 在聊天中插入切換提示
+        label = "Function Calling 模式" if self._use_fc else "Classic RAG 模式"
+        color = "#7C3AED" if self._use_fc else "#1565C0"
+        icon  = "smart_toy" if self._use_fc else "search"
+        desc  = "AI 自主決定呼叫哪些工具進行推理" if self._use_fc else "向量搜尋直接返回相關段落"
+        self._chat_column.controls.append(
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(icon, color=color, size=14),
+                    ft.Text(f"已切換至 {label}　·　{desc}",
+                            size=11, color=color, italic=True),
+                ], spacing=6),
+                bgcolor="#F8F9FA",
+                border=ft.border.all(1, "#E9ECEF"),
+                border_radius=6,
+                padding=ft.padding.symmetric(horizontal=12, vertical=6),
+            )
+        )
+        self._chat_column.update()
 
     def _on_send(self, e):
         if self._loading:
