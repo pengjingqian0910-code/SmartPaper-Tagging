@@ -6,6 +6,10 @@ import threading
 import flet as ft
 from typing import Optional
 
+
+async def _async_call(fn):
+    fn()
+
 from ... import config
 from ...config import (
     GEMINI_MODEL_OPTIONS,
@@ -38,6 +42,7 @@ class SettingsView:
         self._snack_shown = False
 
     def build(self) -> ft.Control:
+        self._update_info: Optional[dict] = None
         return ft.Column([
             ft.Row([
                 ft.Column([
@@ -50,6 +55,7 @@ class SettingsView:
             ft.Column([
                 self._build_api_key_card(),
                 self._build_model_card(),
+                self._build_update_card(),
                 self._build_about_card(),
             ], spacing=16, scroll=ft.ScrollMode.AUTO, expand=True),
         ], expand=True, spacing=12)
@@ -209,6 +215,133 @@ class SettingsView:
         except Exception:
             pass
         self._show_snack(f"模型已切換至 {selected}，即時生效")
+
+    # ── 版本更新卡片 ─────────────────────────────────────────────────────────
+
+    def _build_update_card(self) -> ft.Control:
+        from ...services.updater import get_local_version
+        local_ver = get_local_version()
+
+        self._update_status = ft.Text(
+            "點擊「檢查更新」確認是否有新版本",
+            size=11, color=ft.colors.GREY_600,
+        )
+        self._update_progress = ft.ProgressBar(
+            visible=False, color="#0D9488", bgcolor="#CCFBF1", height=6,
+        )
+        self._download_btn = ft.ElevatedButton(
+            "下載更新", icon=ft.icons.DOWNLOAD_OUTLINED,
+            on_click=self._on_download_update,
+            visible=False,
+            style=ft.ButtonStyle(bgcolor="#0D9488", color=ft.colors.WHITE),
+        )
+
+        content = ft.Column([
+            ft.Row([
+                ft.Text(f"目前版本：", size=12, color=ft.colors.GREY_600),
+                ft.Text(f"v{local_ver}", size=12, weight=ft.FontWeight.W_600),
+            ], spacing=4),
+            self._update_status,
+            self._update_progress,
+            ft.Row([
+                ft.OutlinedButton(
+                    "檢查更新", icon=ft.icons.REFRESH,
+                    on_click=self._on_check_update,
+                    style=ft.ButtonStyle(color="#0D9488"),
+                ),
+                self._download_btn,
+            ], spacing=8),
+        ], spacing=8)
+
+        return _card("版本更新", ft.icons.SYSTEM_UPDATE_OUTLINED, "#0D9488",
+                     content, "#CCFBF1")
+
+    def _on_check_update(self, e):
+        self._update_status.value = "檢查中…"
+        self._update_status.color = ft.colors.ORANGE_700
+        self._download_btn.visible = False
+        try:
+            self._update_status.update()
+            self._download_btn.update()
+        except Exception:
+            pass
+
+        def _run():
+            from ...services.updater import check_for_update
+            info = check_for_update()
+
+            def _done():
+                if info:
+                    self._update_info = info
+                    self._update_status.value = (
+                        f"發現新版本 v{info['version']}！點擊「下載更新」即可升級。"
+                    )
+                    self._update_status.color = ft.colors.GREEN_700
+                    self._download_btn.visible = True
+                else:
+                    self._update_status.value = "已是最新版本 ✓"
+                    self._update_status.color = ft.colors.GREEN_700
+                try:
+                    self._update_status.update()
+                    self._download_btn.update()
+                except Exception:
+                    pass
+
+            self.page.run_task(_async_call, _done)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_download_update(self, e):
+        if not self._update_info:
+            return
+        self._download_btn.disabled = True
+        self._update_progress.visible = True
+        self._update_progress.value = None   # indeterminate
+        self._update_status.value = "下載中…"
+        self._update_status.color = ft.colors.ORANGE_700
+        try:
+            self._download_btn.update()
+            self._update_progress.update()
+            self._update_status.update()
+        except Exception:
+            pass
+
+        url = self._update_info["url"]
+
+        def _run():
+            from ...services.updater import download_update
+
+            def _progress(pct: float):
+                self._update_progress.value = pct
+                try:
+                    self._update_progress.update()
+                except Exception:
+                    pass
+
+            ok = download_update(url, _progress)
+
+            def _done():
+                self._update_progress.visible = False
+                if ok:
+                    self._update_status.value = (
+                        "✓ 下載完成！關閉並重新開啟程式即可套用更新。"
+                    )
+                    self._update_status.color = ft.colors.GREEN_700
+                    self._download_btn.visible = False
+                else:
+                    self._update_status.value = "下載失敗，請稍後再試"
+                    self._update_status.color = ft.colors.RED_700
+                    self._download_btn.disabled = False
+                try:
+                    self._update_progress.update()
+                    self._update_status.update()
+                    self._download_btn.update()
+                except Exception:
+                    pass
+
+            self.page.run_task(_async_call, _done)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── 關於卡片 ─────────────────────────────────────────────────────────────
 

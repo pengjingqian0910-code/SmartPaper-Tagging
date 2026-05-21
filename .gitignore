@@ -47,3 +47,7 @@ replay_pid*.log
 
 # Claude Code memory (private AI session notes)
 .claude/
+
+# Auto-update staging files
+_update.zip
+_update_ready

@@ -285,7 +285,7 @@ class WritingGuideView:
                 cb,
                 ft.Column([
                     ft.Text(
-                        paper.title[:80] + ("…" if len(paper.title) > 80 else ""),
+                        paper.title,
                         size=12, weight=ft.FontWeight.W_500,
                     ),
                     ft.Row([
@@ -391,7 +391,7 @@ class WritingGuideView:
                     ft.Row([
                         ft.Icon("article", size=13, color="#2563EB"),
                         ft.Text(
-                            c.paper.title[:75] + ("…" if len(c.paper.title) > 75 else ""),
+                            c.paper.title,
                             size=12, weight=ft.FontWeight.W_600, expand=True,
                         ),
                         ft.Container(
@@ -509,7 +509,7 @@ class WritingGuideView:
                         ft.Row([
                             ft.Icon("article", size=13, color="#2563EB"),
                             ft.Text(
-                                c.paper.title[:72] + ("…" if len(c.paper.title) > 72 else ""),
+                                c.paper.title,
                                 size=12, weight=ft.FontWeight.W_600, expand=True,
                             ),
                             ft.Container(
@@ -626,7 +626,7 @@ class WritingGuideView:
                         ft.Text("文獻庫對應論文：", size=11, color="#065F46",
                                 weight=ft.FontWeight.W_600),
                         ft.Text(
-                            gap.paper.title[:55] + ("…" if len(gap.paper.title) > 55 else ""),
+                            gap.paper.title,
                             size=11, color="#047857", expand=True,
                         ),
                         ft.Text(f"({gap.paper.year or '?'})", size=10, color=_C_META),
@@ -705,7 +705,7 @@ class WritingGuideView:
                             ft.Row([
                                 ft.Icon("open_in_new", size=12, color=src_color),
                                 ft.Text(
-                                    ext_title[:70] + ("…" if len(ext_title) > 70 else ""),
+                                    ext_title,
                                     size=12, weight=ft.FontWeight.W_500,
                                     color=src_color, expand=True,
                                     tooltip=ext_url or ext_title,
@@ -724,7 +724,7 @@ class WritingGuideView:
                                 size=10, color=_C_META,
                             ),
                             ft.Text(
-                                (ext_abs[:150] + "…") if len(ext_abs) > 150 else ext_abs,
+                                ext_abs,
                                 size=11, color="#374151",
                             ),
                             ft.ElevatedButton(

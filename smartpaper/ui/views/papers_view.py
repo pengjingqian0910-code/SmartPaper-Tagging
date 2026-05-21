@@ -2,10 +2,12 @@
 論文管理視圖 — 重新設計版
 """
 
+import json
 import os
 import platform
 import subprocess
 import flet as ft
+from pathlib import Path
 from typing import Optional, List
 
 import threading
@@ -68,10 +70,14 @@ def _tag_chip(text: str, on_remove=None) -> ft.Container:
     )
 
 
+_ALL_FIELDS = {"abstract", "authors", "venue", "year", "source", "citation_count", "tags", "doi"}
+
+
 class _Card:
     def __init__(self, paper: Paper, on_delete, on_tag_remove, page: ft.Page,
                  has_fulltext: bool = False, on_read_fulltext=None,
-                 search_service=None, pipeline=None):
+                 search_service=None, pipeline=None,
+                 visible_fields=None, custom_fields=None, custom_field_values=None):
         self.paper = paper
         self._page = page
         self._on_delete = on_delete
@@ -86,6 +92,9 @@ class _Card:
         self._container: Optional[ft.Container] = None
         self._similar_col: Optional[ft.Column] = None
         self._cite_btn: Optional[ft.Container] = None
+        self._visible_fields: set = visible_fields if visible_fields is not None else _ALL_FIELDS
+        self._custom_fields: list = custom_fields or []
+        self._custom_field_values: dict = custom_field_values or {}
 
     def _build_tag_row(self) -> ft.Row:
         return ft.Row([
@@ -103,6 +112,7 @@ class _Card:
 
     def build(self) -> ft.Container:
         p = self.paper
+        vf = self._visible_fields
 
         # 作者
         if p.authors:
@@ -110,20 +120,17 @@ class _Card:
         else:
             auth = "作者不詳"
 
-        # 頂部 badge 列
+        # 頂部 badge 列（依可見欄位決定）
         badges = []
-        if p.year:
+        if p.year and "year" in vf:
             badges.append(_chip(str(p.year), YEAR_BG, YEAR_C))
-        if p.source:
+        if p.source and "source" in vf:
             badges.append(_chip(p.source, SRC_BG, SRC_C))
-        if p.citation_count:
+        if p.citation_count and "citation_count" in vf:
             badges.append(_chip(f"引用 {p.citation_count}", "#FEF3C7", "#D97706"))
 
         # 標籤列
         self._tag_row = self._build_tag_row()
-
-        # 摘要 + DOI（預設隱藏）
-        abst = (p.abstract or "")[:600] + ("…" if p.abstract and len(p.abstract) > 600 else "")
 
         # 相似論文區塊
         self._similar_col = ft.Column([], spacing=4, visible=False)
@@ -157,22 +164,35 @@ class _Card:
             tooltip="依摘要語意搜尋相似論文",
         )
 
-        self._detail_col = ft.Column([
-            ft.Container(height=4),
-            ft.Container(
-                content=ft.Text(abst or "（無摘要）", size=12, color=ABST_C),
-                bgcolor="#F8FAFC",
-                padding=10,
-                border_radius=8,
+        # 展開區內容（依可見欄位決定）
+        detail_items: list = [ft.Container(height=4)]
+        if "abstract" in vf:
+            detail_items.append(ft.Container(
+                content=ft.Text(p.abstract or "（無摘要）", size=12, color=ABST_C),
+                bgcolor="#F8FAFC", padding=10, border_radius=8,
                 border=ft.border.all(1, BORDER),
-            ),
-            ft.Text(
+            ))
+        if "doi" in vf:
+            detail_items.append(ft.Text(
                 f"DOI: {p.doi}" if p.doi else "",
                 size=10, color="#3B82F6", selectable=True,
-            ),
-            ft.Row([sim_btn, self._cite_btn], spacing=8),
-            self._similar_col,
-        ], spacing=6, visible=False)
+            ))
+        # 自訂欄位
+        for cf in self._custom_fields:
+            val = self._custom_field_values.get(str(p.id), {}).get(cf["name"], "")
+            if val:
+                detail_items.append(ft.Container(
+                    content=ft.Row([
+                        ft.Text(f"{cf['name']}：", size=11, color=AUTH_C,
+                                weight=ft.FontWeight.W_600),
+                        ft.Text(val, size=12, color=TITLE_C, expand=True, selectable=True),
+                    ], spacing=6),
+                    bgcolor="#F8FAFC", padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                    border_radius=6, border=ft.border.all(1, BORDER),
+                ))
+        detail_items += [ft.Row([sim_btn, self._cite_btn], spacing=8), self._similar_col]
+
+        self._detail_col = ft.Column(detail_items, spacing=6, visible=False)
 
         # 刪除按鈕
         del_btn = ft.Container(
@@ -200,42 +220,29 @@ class _Card:
             visible=self._has_fulltext,
         )
 
-        card_inner = ft.Column([
-            # 標題列
+        # 卡片內容（依可見欄位決定）
+        card_items: list = [
             ft.Row([
-                ft.Text(
-                    p.title,
-                    size=14,
-                    weight=ft.FontWeight.W_600,
-                    color=TITLE_C,
-                    expand=True,
-                    max_lines=2,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                ),
+                ft.Text(p.title, size=14, weight=ft.FontWeight.W_600, color=TITLE_C,
+                        expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
                 read_btn,
                 del_btn,
             ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
+        ]
+        if "authors" in vf:
+            card_items.append(ft.Text(auth, size=11, color=AUTH_C,
+                                      max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
+        if "venue" in vf and p.venue:
+            card_items.append(ft.Text(p.venue, size=11, color=META_C, italic=True))
+        if badges:
+            card_items.append(ft.Row(badges, spacing=6))
+        if "tags" in vf:
+            card_items.append(
+                self._tag_row if p.tags else ft.Text("（無標籤）", size=10, color=META_C)
+            )
+        card_items.append(self._detail_col)
 
-            # 作者
-            ft.Text(auth, size=11, color=AUTH_C,
-                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-
-            # 期刊
-            ft.Text(
-                p.venue[:70] + ("…" if p.venue and len(p.venue) > 70 else "") if p.venue else "",
-                size=11, color=META_C, italic=True,
-                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
-            ),
-
-            # Badges
-            ft.Row(badges, spacing=6) if badges else ft.Container(height=0),
-
-            # 標籤
-            self._tag_row if p.tags else ft.Text("（無標籤）", size=10, color=META_C),
-
-            # 摘要展開區
-            self._detail_col,
-        ], spacing=5)
+        card_inner = ft.Column(card_items, spacing=5)
 
         self._container = ft.Container(
             content=card_inner,
@@ -317,7 +324,6 @@ class _Card:
                         items.append(ft.Container(
                             content=ft.Column([
                                 ft.Text(rp.title, size=12, color=TITLE_C,
-                                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
                                         weight=ft.FontWeight.W_500),
                                 ft.Row([
                                     ft.Text(f"相似度 {score_pct}%", size=10, color="#059669"),
@@ -368,7 +374,7 @@ class _Card:
         )
         import_btn.on_click = lambda e, data=ex, b=import_btn: self._import_external_paper(data, b)
 
-        abstract_snippet = (ex.get("abstract") or "")[:150]
+        abstract_snippet = ex.get("abstract") or ""
         year_str = str(ex.get("year") or "")
         authors = ex.get("authors") or []
         author_str = authors[0] + (" et al." if len(authors) > 1 else "") if authors else ""
@@ -376,17 +382,14 @@ class _Card:
         return ft.Container(
             content=ft.Column([
                 ft.Text(ex["title"], size=12, color=TITLE_C,
-                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
                         weight=ft.FontWeight.W_500),
-                ft.Text(author_str, size=10, color="#475569",
-                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(author_str, size=10, color="#475569"),
                 ft.Row([
                     ft.Text(year_str, size=10, color=META_C),
                     import_btn,
                 ], spacing=8, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Text(abstract_snippet + ("…" if len(abstract_snippet) == 150 else ""),
-                        size=10, color="#64748B", italic=True,
-                        max_lines=3, overflow=ft.TextOverflow.ELLIPSIS) if abstract_snippet else ft.Container(),
+                ft.Text(abstract_snippet,
+                        size=10, color="#64748B", italic=True) if abstract_snippet else ft.Container(),
             ], spacing=3),
             padding=ft.padding.symmetric(horizontal=10, vertical=8),
             border_radius=8,
@@ -497,6 +500,11 @@ class _Card:
         self._page.update()
 
 
+_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+_CUSTOM_FIELDS_FILE = _DATA_DIR / "custom_fields.json"
+_CUSTOM_VALUES_FILE = _DATA_DIR / "custom_field_values.json"
+
+
 class PapersView:
     def __init__(self, page: ft.Page):
         self.page = page
@@ -516,6 +524,10 @@ class PapersView:
         self._pagination_text: Optional[ft.Text] = None
         self.tag_dropdown: Optional[ft.Dropdown] = None
         self.sort_dd: Optional[ft.Dropdown] = None
+        # 欄位設定
+        self._visible_fields: set = set(_ALL_FIELDS)
+        self._custom_fields: list = self._load_custom_fields()
+        self._custom_field_values: dict = self._load_custom_field_values()
 
     # ── Build ─────────────────────────────────────────────────────────
 
@@ -610,6 +622,13 @@ class PapersView:
             ], spacing=2),
             ft.Row([
                 ft.ElevatedButton(
+                    "欄位設定",
+                    icon="tune",
+                    color="#0D9488",
+                    bgcolor=CARD,
+                    on_click=self._on_open_field_settings,
+                ),
+                ft.ElevatedButton(
                     "標籤管理",
                     icon="label",
                     color="#7C3AED",
@@ -700,6 +719,9 @@ class PapersView:
                 on_read_fulltext=self._on_read_fulltext,
                 search_service=self.search_service,
                 pipeline=self.pipeline,
+                visible_fields=self._visible_fields,
+                custom_fields=self._custom_fields,
+                custom_field_values=self._custom_field_values,
             ).build()
             for p in page_papers
         ]
@@ -798,6 +820,235 @@ class PapersView:
 
     def _close_dlg(self, dlg):
         dlg.open = False
+        self.page.update()
+
+    # ── 自訂欄位 I/O ─────────────────────────────────────────────────
+
+    def _load_custom_fields(self) -> list:
+        try:
+            if _CUSTOM_FIELDS_FILE.exists():
+                return json.loads(_CUSTOM_FIELDS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return []
+
+    def _save_custom_fields(self):
+        try:
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+            _CUSTOM_FIELDS_FILE.write_text(
+                json.dumps(self._custom_fields, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _load_custom_field_values(self) -> dict:
+        try:
+            if _CUSTOM_VALUES_FILE.exists():
+                return json.loads(_CUSTOM_VALUES_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def _save_custom_field_values(self):
+        try:
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+            _CUSTOM_VALUES_FILE.write_text(
+                json.dumps(self._custom_field_values, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    # ── 欄位設定 ─────────────────────────────────────────────────────
+
+    def _on_open_field_settings(self, e):
+        field_labels = {
+            "abstract":       "摘要（展開後顯示）",
+            "authors":        "作者",
+            "venue":          "期刊／會議",
+            "year":           "年份",
+            "source":         "來源",
+            "citation_count": "引用數",
+            "tags":           "標籤",
+            "doi":            "DOI（展開後顯示）",
+        }
+
+        cb_refs: dict[str, ft.Checkbox] = {}
+        builtin_rows = []
+        for field, label in field_labels.items():
+            cb = ft.Checkbox(value=field in self._visible_fields, label=label, scale=0.9)
+            cb_refs[field] = cb
+            builtin_rows.append(cb)
+
+        custom_col = ft.Column(spacing=6)
+        status_text = ft.Text("", size=11)
+
+        def _rebuild_custom():
+            custom_col.controls.clear()
+            for i, cf in enumerate(self._custom_fields):
+                def _make_del(idx=i):
+                    def _del(_e):
+                        name = self._custom_fields[idx]["name"]
+                        self._custom_fields.pop(idx)
+                        # remove stored values for this field
+                        for vals in self._custom_field_values.values():
+                            vals.pop(name, None)
+                        self._save_custom_fields()
+                        self._save_custom_field_values()
+                        _rebuild_custom()
+                        self.page.update()
+                    return _del
+
+                def _make_ai_btn(field_cfg=cf):
+                    def _click(_e):
+                        _do_ai_fill(field_cfg)
+                    return _click
+
+                custom_col.controls.append(ft.Container(
+                    content=ft.Row([
+                        ft.Column([
+                            ft.Text(cf["name"], size=12, weight=ft.FontWeight.W_600),
+                            ft.Text(cf.get("description", ""), size=10, color=META_C),
+                        ], spacing=1, expand=True),
+                        ft.TextButton("AI 填寫", icon="auto_awesome",
+                                      on_click=_make_ai_btn(),
+                                      style=ft.ButtonStyle(color="#7C3AED")),
+                        ft.IconButton(icon="delete_outline", icon_color=RED,
+                                      icon_size=18, on_click=_make_del()),
+                    ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    bgcolor="#F8FAFC", border=ft.border.all(1, BORDER),
+                    border_radius=8, padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                ))
+
+        _rebuild_custom()
+
+        new_name = ft.TextField(
+            hint_text="欄位名稱", expand=True, height=38, border_radius=8,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=0),
+        )
+        new_desc = ft.TextField(
+            hint_text="描述（AI 根據摘要填寫此欄位時的說明）",
+            expand=True, height=38, border_radius=8,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=0),
+        )
+
+        def _do_ai_fill(cf: dict):
+            fname = cf["name"]
+            fdesc = cf.get("description", fname)
+            status_text.value = f"AI 填寫「{fname}」中…"
+            status_text.color = "#7C3AED"
+            self.page.update()
+
+            def _run():
+                try:
+                    import google.genai as genai
+                    from ... import config as _cfg
+                    client = genai.Client(api_key=_cfg.GEMINI_API_KEY)
+                    filled = 0
+                    for paper in self.papers:
+                        if not paper.abstract:
+                            continue
+                        prompt = (
+                            f"Based on this academic paper abstract, provide a concise value "
+                            f"for the field '{fname}' (description: '{fdesc}'). "
+                            f"Abstract: {paper.abstract[:800]}\n"
+                            f"Respond with only the value, no explanation, under 120 characters."
+                        )
+                        try:
+                            val = client.models.generate_content(
+                                model=_cfg.GEMINI_MODEL, contents=prompt
+                            ).text.strip()
+                            pid = str(paper.id)
+                            if pid not in self._custom_field_values:
+                                self._custom_field_values[pid] = {}
+                            self._custom_field_values[pid][fname] = val
+                            filled += 1
+                        except Exception:
+                            pass
+                    self._save_custom_field_values()
+
+                    def _done():
+                        status_text.value = f"已填寫 {filled} 篇論文的「{fname}」"
+                        status_text.color = GREEN
+                        self._refresh_list()
+                        self.page.update()
+
+                    self.page.run_task(_async_done, _done)
+                except Exception as ex:
+                    def _err():
+                        status_text.value = f"AI 填寫失敗：{ex}"
+                        status_text.color = RED
+                        self.page.update()
+                    self.page.run_task(_async_done, _err)
+
+            async def _async_done(fn):
+                fn()
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        def _add_field(_e):
+            name = (new_name.value or "").strip()
+            desc = (new_desc.value or "").strip()
+            if not name:
+                status_text.value = "請輸入欄位名稱"
+                status_text.color = RED
+                self.page.update()
+                return
+            if any(cf["name"] == name for cf in self._custom_fields):
+                status_text.value = "欄位名稱已存在"
+                status_text.color = RED
+                self.page.update()
+                return
+            self._custom_fields.append({"name": name, "description": desc})
+            self._save_custom_fields()
+            new_name.value = ""
+            new_desc.value = ""
+            status_text.value = f"已新增欄位「{name}」，點擊「AI 填寫」可自動填寫"
+            status_text.color = GREEN
+            _rebuild_custom()
+            self.page.update()
+
+        def _apply(_e):
+            self._visible_fields = {f for f, cb in cb_refs.items() if cb.value}
+            self._refresh_list()
+            self._close_dlg(dlg)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("欄位設定", size=15, weight=ft.FontWeight.W_600),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Text("顯示欄位", size=12, weight=ft.FontWeight.W_600, color="#475569"),
+                    ft.Column(builtin_rows, spacing=0),
+                    ft.Divider(height=10, color=BORDER),
+                    ft.Text("自訂欄位", size=12, weight=ft.FontWeight.W_600, color="#475569"),
+                    ft.Text("展開論文卡片後顯示，AI 依摘要自動填寫",
+                            size=11, color=META_C),
+                    custom_col,
+                    ft.Row([new_name, new_desc], spacing=8),
+                    ft.ElevatedButton(
+                        "新增欄位", icon="add",
+                        on_click=_add_field,
+                        style=ft.ButtonStyle(bgcolor="#6366F1", color=ft.colors.WHITE),
+                    ),
+                    status_text,
+                ], spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=520,
+                height=560,
+            ),
+            actions=[
+                ft.TextButton("取消", on_click=lambda _e: self._close_dlg(dlg)),
+                ft.ElevatedButton(
+                    "套用顯示設定",
+                    on_click=_apply,
+                    style=ft.ButtonStyle(bgcolor="#6366F1", color=ft.colors.WHITE),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dlg
+        dlg.open = True
         self.page.update()
 
     # ── 標籤管理 ─────────────────────────────────────────────────────

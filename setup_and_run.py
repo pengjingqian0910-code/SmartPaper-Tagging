@@ -316,7 +316,71 @@ class SetupWizard:
 
 # ─── 入口 ─────────────────────────────────────────────────────────────────────
 
+def _apply_pending_update():
+    """套用在 Settings 頁面下載好的更新包（若存在）。"""
+    update_zip   = PROJECT_DIR / "_update.zip"
+    update_ready = PROJECT_DIR / "_update_ready"
+    if not update_ready.exists() or not update_zip.exists():
+        return
+
+    import shutil, tempfile, zipfile
+    try:
+        # 顯示簡易提示視窗
+        root = tk.Tk()
+        root.withdraw()
+        msg = tk.Toplevel(root)
+        msg.title("SmartPaper 更新中")
+        msg.geometry("340x80")
+        msg.resizable(False, False)
+        tk.Label(msg, text="正在套用更新，請稍候…", font=("Segoe UI", 11),
+                 pady=20).pack()
+        msg.update()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with zipfile.ZipFile(update_zip) as zf:
+                zf.extractall(tmp_path)
+            extracted = [p for p in tmp_path.iterdir() if p.is_dir()]
+            if extracted:
+                src = extracted[0]
+                preserve = {
+                    "data", ".env", ".setup_done",
+                    "venv", ".venv", "_update.zip", "_update_ready",
+                    ".git", ".gitignore", "assets",
+                }
+                for item in src.iterdir():
+                    if item.name in preserve:
+                        continue
+                    dst = PROJECT_DIR / item.name
+                    if item.is_dir():
+                        if dst.exists():
+                            shutil.rmtree(dst)
+                        shutil.copytree(item, dst)
+                    else:
+                        shutil.copy2(item, dst)
+
+        update_zip.unlink(missing_ok=True)
+        update_ready.unlink(missing_ok=True)
+
+        # 讀取新版本號
+        ver_file = PROJECT_DIR / "version.txt"
+        new_ver  = ver_file.read_text(encoding="utf-8").strip() if ver_file.exists() else "?"
+
+        msg.destroy()
+        root.destroy()
+        messagebox.showinfo("更新完成", f"已更新至 v{new_ver}，即將啟動程式。")
+
+    except Exception as ex:
+        try:
+            messagebox.showerror("更新失敗", f"套用更新時發生錯誤：\n{ex}\n\n程式將繼續以舊版本啟動。")
+        except Exception:
+            pass
+
+
 def main():
+    # 先套用下載完成的更新（若有）
+    _apply_pending_update()
+
     if is_setup_done():
         # 後續執行：直接啟動
         launch_app()
