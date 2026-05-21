@@ -11,7 +11,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 PYTHON_EXE  = Path(sys.executable)
 PYTHONW_EXE = PYTHON_EXE.parent / "pythonw.exe"   # 無主控台視窗
-MAIN_PY     = PROJECT_DIR / "main.py"
+LAUNCHER_PY = PROJECT_DIR / "launcher.py"   # 啟動動畫入口
 ICON_PATH   = PROJECT_DIR / "assets" / "icon.ico"
 
 
@@ -51,7 +51,7 @@ def create_shortcut():
 $ws  = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut('{shortcut}')
 $lnk.TargetPath       = '{runner}'
-$lnk.Arguments        = '"{MAIN_PY}" ui'
+$lnk.Arguments        = '"{LAUNCHER_PY}"'
 $lnk.WorkingDirectory = '{PROJECT_DIR}'
 $lnk.WindowStyle      = 1
 $lnk.IconLocation     = '{icon}'
@@ -67,7 +67,7 @@ $lnk.Save()
         sys.exit(1)
 
     print(f"[OK] Desktop shortcut created: {shortcut}")
-    print(f"     Runs: {runner} \"{MAIN_PY}\" ui")
+    print(f"     Runs: {runner} \"{LAUNCHER_PY}\"")
     print(f"     CWD:  {PROJECT_DIR}")
 
 
