@@ -1023,30 +1023,66 @@ class QAView:
 
         def run():
             try:
-                result = service.ask(
-                    question=question,
-                    history=self._history,
-                    top_k=self._top_k,
-                    filter_paper_ids=self._source_paper_ids,
-                    context_paper_ids=context_paper_ids,
-                )
+                # ── 串流模式（僅 QAService 支援，FC 模式仍用阻塞式）
+                use_stream = not self._use_fc and hasattr(service, "ask_stream")
+                if use_stream:
+                    stream = service.ask_stream(
+                        question=question,
+                        history=self._history,
+                        top_k=self._top_k,
+                        filter_paper_ids=self._source_paper_ids,
+                        context_paper_ids=context_paper_ids,
+                    )
+                    result = None
+                    answer_text_ctrl: Optional[ft.Text] = None
+                    answer_container: Optional[ft.Container] = None
+
+                    for item in stream:
+                        if item is None:
+                            break
+                        elif isinstance(item, QAResult):
+                            # 第一個 yield：建立 UI 骨架（含 sources）
+                            result = item
+                            self._chat_column.controls.remove(loading_ctrl)
+                            answer_text_ctrl, answer_container = \
+                                self._append_assistant_msg_streaming(result)
+                            self._chat_column.update()
+                        elif isinstance(item, str) and answer_text_ctrl is not None:
+                            # 後續 yield：逐 token 更新文字
+                            answer_text_ctrl.value = (answer_text_ctrl.value or "") + item
+                            answer_text_ctrl.update()
+
+                    if result is None:
+                        result = QAResult(answer="⚠️ 串流中斷", query=question)
+                else:
+                    result = service.ask(
+                        question=question,
+                        history=self._history,
+                        top_k=self._top_k,
+                        filter_paper_ids=self._source_paper_ids,
+                        context_paper_ids=context_paper_ids,
+                    )
+                    self._chat_column.controls.remove(loading_ctrl)
+                    self._append_assistant_msg(result)
+                    self._chat_column.update()
+
                 self._history.append(ChatMessage(role="user", content=question))
-                self._history.append(ChatMessage(role="assistant",
-                                                 content=result.answer))
+                self._history.append(ChatMessage(role="assistant", content=result.answer))
                 self._last_result = result
+
             except Exception as ex:
                 result = QAResult(answer=f"⚠️ 發生錯誤：{ex}", query=question)
+                self._chat_column.controls.remove(loading_ctrl)
+                self._append_assistant_msg(result)
+                self._chat_column.update()
 
-            self._chat_column.controls.remove(loading_ctrl)
-            self._append_assistant_msg(result)
             self._sessions[self._current_session_idx]["messages"].append(
                 {"type": "assistant", "result": result}
             )
             self._sessions[self._current_session_idx]["last_result"] = result
             self._set_loading(False)
-            self._chat_column.update()
 
-            # 追問建議：獨立 thread，避免與下一輪問答 race condition
+            # 追問建議
             captured_answer = result.answer
             def _suggest():
                 try:
@@ -1101,16 +1137,52 @@ class QAView:
         if _update:
             self._chat_column.update()
 
+    def _intent_chip(self, result: QAResult) -> Optional[ft.Control]:
+        """回傳意圖指示器 chip（None 表示無需顯示）。"""
+        chips = []
+        intent_map = {
+            "qa":       ("search",    ft.colors.BLUE_700,   "Classic RAG"),
+            "action":   ("bolt",      ft.colors.ORANGE_700, "操作指令"),
+            "chitchat": ("chat",      ft.colors.GREY_600,   "閒聊"),
+        }
+        icon, color, label = intent_map.get(result.intent, ("help", ft.colors.GREY_500, result.intent))
+        chips.append(ft.Container(
+            content=ft.Row([
+                ft.Icon(icon, color=color, size=11),
+                ft.Text(f"{label} {result.intent_conf:.0%}", size=9, color=color),
+            ], spacing=3, tight=True),
+            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            border_radius=50,
+            bgcolor=ft.colors.with_opacity(0.08, color),
+            border=ft.border.all(1, ft.colors.with_opacity(0.25, color)),
+        ))
+        if result.cache_hit:
+            chips.append(ft.Container(
+                content=ft.Row([
+                    ft.Icon("flash_on", color="#0D9488", size=11),
+                    ft.Text(f"快取命中", size=9, color="#0D9488"),
+                ], spacing=3, tight=True),
+                padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                border_radius=50,
+                bgcolor="#F0FDFA",
+                border=ft.border.all(1, "#99F6E4"),
+            ))
+        return ft.Row(chips, spacing=6) if chips else None
+
     def _append_assistant_msg(self, result: QAResult):
         source_controls = self._build_source_controls(result.source_chunks)
+        intent_chip = self._intent_chip(result)
+        header_row = ft.Row([
+            ft.Icon("smart_toy", size=14, color=ft.colors.PURPLE_700),
+            ft.Text("AI 助理", size=11, weight=ft.FontWeight.W_600,
+                    color=ft.colors.PURPLE_700),
+            ft.Container(expand=True),
+            *([intent_chip] if intent_chip else []),
+        ], spacing=4)
         self._chat_column.controls.append(
             ft.Container(
                 content=ft.Column([
-                    ft.Row([
-                        ft.Icon("smart_toy", size=14, color=ft.colors.PURPLE_700),
-                        ft.Text("AI 助理", size=11, weight=ft.FontWeight.W_600,
-                                color=ft.colors.PURPLE_700),
-                    ], spacing=4),
+                    header_row,
                     ft.Text(result.answer, size=13, selectable=True),
                     *([ft.Divider(height=6, color=COLOR_BORDER)] + source_controls
                       if source_controls else []),
@@ -1118,6 +1190,32 @@ class QAView:
                 bgcolor=COLOR_ASST_BG, border_radius=8, padding=12,
             )
         )
+
+    def _append_assistant_msg_streaming(self, result: QAResult):
+        """
+        建立串流 UI 骨架，回傳 (answer_text_ctrl, container) 供呼叫端逐步更新文字。
+        """
+        source_controls = self._build_source_controls(result.source_chunks)
+        intent_chip = self._intent_chip(result)
+        header_row = ft.Row([
+            ft.Icon("smart_toy", size=14, color=ft.colors.PURPLE_700),
+            ft.Text("AI 助理", size=11, weight=ft.FontWeight.W_600,
+                    color=ft.colors.PURPLE_700),
+            ft.Container(expand=True),
+            *([intent_chip] if intent_chip else []),
+        ], spacing=4)
+        answer_text = ft.Text("", size=13, selectable=True)
+        container = ft.Container(
+            content=ft.Column([
+                header_row,
+                answer_text,
+                *([ft.Divider(height=6, color=COLOR_BORDER)] + source_controls
+                  if source_controls else []),
+            ], spacing=6),
+            bgcolor=COLOR_ASST_BG, border_radius=8, padding=12,
+        )
+        self._chat_column.controls.append(container)
+        return answer_text, container
 
     def _build_source_controls(self, source_chunks: list[SourceChunk]) -> list[ft.Control]:
         if not source_chunks:

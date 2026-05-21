@@ -40,13 +40,16 @@ class SearchService:
         self._sem_cache = SemanticCache(similarity_threshold=0.93, ttl_seconds=3600)
 
     def _ensure_bm25(self) -> None:
-        """懶載入：第一次搜尋時建立 BM25 索引"""
+        """懶載入：第一次搜尋時建立 BM25 索引（優先從磁碟快取載入）"""
         if not self._bm25.is_built:
-            papers = self.sqlite_db.get_all(limit=5000)
-            self._bm25.build(papers)
+            if not self._bm25.load():          # 磁碟無快取 → 重建並儲存
+                papers = self.sqlite_db.get_all(limit=5000)
+                self._bm25.build(papers)
+                self._bm25.save()              # 序列化到 data/bm25_cache.pkl
 
     def invalidate_bm25(self) -> None:
-        """資料庫更新後讓 BM25 索引、精確快取、語義快取全部失效"""
+        """資料庫更新後讓 BM25 索引、精確快取、語義快取、磁碟快取全部失效"""
+        BM25Index.invalidate_cache()
         self._bm25 = BM25Index()
         self._query_cache.clear()
         self._sem_cache.invalidate()

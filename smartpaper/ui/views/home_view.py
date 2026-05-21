@@ -12,6 +12,7 @@ from ...services.ingestion import XLSXIngestion
 from ...services.quick_import import QuickImportService
 from ...services.pdf_ingestion import PDFIngestionService
 from ...services.pdf_import_service import PDFImportService, ExtractedMeta
+from ...services.bg_worker import BgWorker
 from ...database.sqlite_db import SQLiteDB
 from ...models import ProcessingStatus
 from .. import theme as T
@@ -134,10 +135,13 @@ class HomeView:
                 # Row 4: Quick import card (DOI / arXiv)
                 self._build_quick_import_card(),
 
-                # Row 5: PDF full-text upload card
+                # Row 5: PDF full-text upload card (with drop zone)
                 self._build_pdf_card(),
 
-                # Row 6: Bookmarklet install card
+                # Row 6: arXiv daily recommendations
+                self._build_arxiv_card(),
+
+                # Row 7: Bookmarklet install card
                 self._build_bookmarklet_card(),
             ],
             spacing=16,
@@ -397,9 +401,21 @@ class HomeView:
         self.status_text.value = ""
         self.page.update()
 
-        threading.Thread(target=self.process_file).start()
+        # 使用 BgWorker 背景執行，UI 保持可互動
+        BgWorker.get().submit(
+            "匯入論文清單",
+            self.process_file,
+            on_done=self._on_process_done,
+        )
 
-    def process_file(self):
+    def _on_process_done(self, success: bool, msg: str):
+        self.is_processing = False
+        self.process_btn.disabled = False
+        self.progress_bar.visible = False
+        self.progress_text.visible = False
+        self.page.update()
+
+    def process_file(self, progress_callback=None):
         try:
             if self.column_panel.visible and self._headers:
                 title_col = int(self.dd_title.value)
@@ -452,10 +468,6 @@ class HomeView:
             self.status_text.color = T.ROSE
 
         finally:
-            self.is_processing = False
-            self.process_btn.disabled = False
-            self.progress_bar.visible = False
-            self.progress_text.visible = False
             self.page.update()
 
     def on_progress_update(self, status: ProcessingStatus):
@@ -561,6 +573,26 @@ class HomeView:
             style=ft.ButtonStyle(color="#6A1B9A"),
         )
 
+        # 拖曳區（視覺化 drop zone — 點擊開啟 FilePicker）
+        drop_zone = ft.Container(
+            content=ft.Column([
+                ft.Icon("cloud_upload", size=32, color="#94A3B8"),
+                ft.Text("點擊選擇 PDF 或拖曳至此", size=12, color="#94A3B8",
+                        text_align=ft.TextAlign.CENTER),
+                ft.Text("支援 .pdf 格式，可多選", size=10, color="#CBD5E1",
+                        text_align=ft.TextAlign.CENTER),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+            width=float("inf"),
+            height=90,
+            border=ft.border.all(2, "#CBD5E1"),
+            border_radius=12,
+            bgcolor="#F8FAFC",
+            alignment=ft.alignment.center,
+            on_click=self._on_pick_pdfs,
+            ink=True,
+            tooltip="點擊選擇 PDF 檔案（可多選）",
+        )
+
         return T.card(
             ft.Column([
                 ft.Row([
@@ -572,8 +604,10 @@ class HomeView:
                     "上傳 PDF 後可用「問論文」功能進行章節級精準問答",
                     size=12, color=T.TEXT_M,
                 ),
+                # 拖曳區
+                drop_zone,
                 # 操作列
-                ft.Row([pick_btn, import_all_btn, new_paper_btn],
+                ft.Row([import_all_btn, new_paper_btn],
                        spacing=10, wrap=True,
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 # 佇列（選完 PDF 後顯示）
@@ -770,6 +804,137 @@ class HomeView:
         self.page.dialog = dlg
         dlg.open = True
         self.page.update()
+
+    # ── arXiv Daily Recommendations ──────────────────────────────────
+
+    def _build_arxiv_card(self) -> ft.Container:
+        self._arxiv_status = ft.Text("點擊「取得推薦」，根據你的標籤從 arXiv 找相關新論文",
+                                     size=12, color=T.TEXT_M)
+        self._arxiv_list = ft.Column(spacing=8)
+        self._arxiv_btn = T.pill_btn("取得推薦", "auto_awesome",
+                                     self._on_fetch_arxiv, filled=True)
+
+        return T.card(
+            ft.Column([
+                ft.Row([
+                    T.icon_badge("rss_feed", "#B45309", size=16, bg_size=36),
+                    T.h3("arXiv 每日推薦"),
+                    ft.Container(expand=True),
+                    self._arxiv_btn,
+                ], spacing=12),
+                T.soft_divider(),
+                ft.Text("根據你的文獻庫標籤，從 arXiv 找最新相關論文",
+                        size=12, color=T.TEXT_M),
+                self._arxiv_status,
+                self._arxiv_list,
+            ], spacing=10),
+            padding=24,
+        )
+
+    def _on_fetch_arxiv(self, e):
+        self._arxiv_btn.disabled = True
+        self._arxiv_status.value = "⏳ 查詢 arXiv 中..."
+        self._arxiv_status.color = T.ACCENT
+        self._arxiv_list.controls.clear()
+        self.page.update()
+
+        def run():
+            try:
+                # 取前 3 個最常見標籤作為查詢關鍵字
+                papers = self._sqlite.get_all(limit=1000)
+                from collections import Counter
+                tag_counter: Counter = Counter()
+                for p in papers:
+                    for t in (p.tags or []):
+                        tag_counter[t] += 1
+
+                top_tags = [t for t, _ in tag_counter.most_common(3)]
+                if not top_tags:
+                    self._arxiv_status.value = "⚠️ 尚無標籤，請先匯入並標記論文"
+                    self._arxiv_status.color = T.ROSE
+                    return
+
+                query = " OR ".join(top_tags[:3])
+                from ...api.arxiv import ArxivAPI
+                arxiv = ArxivAPI()
+                results = arxiv.search(query, max_results=8)
+
+                existing_titles = {p.title.lower().strip() for p in papers}
+                new_results = [
+                    r for r in results
+                    if r.get("title", "").lower().strip() not in existing_titles
+                ][:6]
+
+                if not new_results:
+                    self._arxiv_status.value = "✓ 沒有找到未收錄的新論文"
+                    self._arxiv_status.color = T.TEXT_M
+                    return
+
+                self._arxiv_status.value = (
+                    f"根據標籤「{', '.join(top_tags)}」找到 {len(new_results)} 篇新論文："
+                )
+                self._arxiv_status.color = T.GREEN
+
+                for r in new_results:
+                    arxiv_id = r.get("arxiv_id", "")
+                    title = r.get("title", "（無標題）")[:70]
+                    authors = ", ".join((r.get("authors") or [])[:3])
+                    year = str(r.get("year", "")) if r.get("year") else ""
+
+                    def _import_one(ev, rid=arxiv_id, rt=r.get("title", "")):
+                        self._arxiv_status.value = f"⏳ 匯入：{rt[:40]}..."
+                        self._arxiv_status.color = T.ACCENT
+                        self.page.update()
+                        def _do():
+                            if not self._quick_importer:
+                                self._quick_importer = QuickImportService()
+                            paper, err = self._quick_importer.import_from_text(rid)
+                            if err:
+                                self._arxiv_status.value = f"❌ {err}"
+                                self._arxiv_status.color = T.ROSE
+                            else:
+                                self._arxiv_status.value = f"✅ 已匯入：{paper.title[:50]}"
+                                self._arxiv_status.color = T.GREEN
+                                new_stats = self._get_stats()
+                                self.stats_row.controls = \
+                                    self._build_stats_row(new_stats).controls
+                            self.page.update()
+                        threading.Thread(target=_do, daemon=True).start()
+
+                    row = ft.Container(
+                        content=ft.Row([
+                            ft.Column([
+                                ft.Text(title, size=12, color="#1E293B",
+                                        weight=ft.FontWeight.W_500,
+                                        overflow=ft.TextOverflow.ELLIPSIS, max_lines=2),
+                                ft.Text(
+                                    f"{authors}{' · ' if authors and year else ''}{year}",
+                                    size=10, color="#64748B",
+                                ),
+                            ], expand=True, spacing=2),
+                            ft.IconButton(
+                                icon="add_circle_outline",
+                                icon_color=T.ACCENT,
+                                icon_size=18,
+                                tooltip="一鍵匯入此論文",
+                                on_click=_import_one,
+                            ),
+                        ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor="#F8FAFC",
+                        border=ft.border.all(1, "#E2E8F0"),
+                        border_radius=8,
+                        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                    )
+                    self._arxiv_list.controls.append(row)
+
+            except Exception as ex:
+                self._arxiv_status.value = f"❌ 查詢失敗：{ex}"
+                self._arxiv_status.color = T.ROSE
+            finally:
+                self._arxiv_btn.disabled = False
+                self.page.update()
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ── Bookmarklet Card ──────────────────────────────────────────────
 

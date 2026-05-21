@@ -1,12 +1,17 @@
 """
 BM25 全文搜尋索引
 用於與向量搜尋結合，透過 Reciprocal Rank Fusion 實現混合搜尋
+支援磁碟持久化：data/bm25_cache.pkl — 避免每次啟動重建索引
 """
 
+import pickle
 import re
+from pathlib import Path
 from typing import Optional
 
 from ..models import Paper
+
+_DEFAULT_CACHE = Path("data/bm25_cache.pkl")
 
 
 class BM25Index:
@@ -23,6 +28,37 @@ class BM25Index:
         self._papers = papers
         corpus = [self._tokenize(f"{p.title} {p.abstract or ''}") for p in papers]
         self._bm25 = BM25Okapi(corpus)
+
+    def save(self, path: Path = _DEFAULT_CACHE) -> None:
+        """序列化索引到磁碟。"""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                pickle.dump({"papers": self._papers, "bm25": self._bm25}, f,
+                            protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception:
+            pass  # 持久化失敗不影響搜尋
+
+    def load(self, path: Path = _DEFAULT_CACHE) -> bool:
+        """從磁碟還原索引。回傳是否成功。"""
+        try:
+            if not path.exists():
+                return False
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+            self._papers = data["papers"]
+            self._bm25 = data["bm25"]
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def invalidate_cache(path: Path = _DEFAULT_CACHE) -> None:
+        """刪除磁碟快取（資料庫更新後呼叫）。"""
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     def _tokenize(self, text: str) -> list[str]:
         """簡單小寫 + 英文/CJK 分詞"""

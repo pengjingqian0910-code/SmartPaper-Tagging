@@ -164,6 +164,22 @@ class _Card:
             tooltip="依摘要語意搜尋相似論文",
         )
 
+        # Semantic Scholar 補齊元資料按鈕
+        self._ss_status = ft.Text("", size=10, color="#64748B")
+        ss_enrich_btn = ft.Container(
+            content=ft.Row([
+                ft.Icon("cloud_sync", size=12, color="#0369A1"),
+                ft.Text("SS 補齊元資料", size=11, color="#0369A1"),
+            ], spacing=4, tight=True),
+            on_click=self._on_enrich_ss,
+            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+            border_radius=6,
+            border=ft.border.all(1, "#BAE6FD"),
+            bgcolor="#F0F9FF",
+            tooltip="透過 Semantic Scholar 補齊作者、期刊、年份、引用數等元資料",
+            visible=bool(p.doi or p.title),
+        )
+
         # 展開區內容（依可見欄位決定）
         detail_items: list = [ft.Container(height=4)]
         if "abstract" in vf:
@@ -190,7 +206,11 @@ class _Card:
                     bgcolor="#F8FAFC", padding=ft.padding.symmetric(horizontal=10, vertical=6),
                     border_radius=6, border=ft.border.all(1, BORDER),
                 ))
-        detail_items += [ft.Row([sim_btn, self._cite_btn], spacing=8), self._similar_col]
+        detail_items += [
+            ft.Row([sim_btn, self._cite_btn, ss_enrich_btn], spacing=8, wrap=True),
+            self._ss_status,
+            self._similar_col,
+        ]
 
         self._detail_col = ft.Column(detail_items, spacing=6, visible=False)
 
@@ -481,6 +501,70 @@ class _Card:
 
         async def _async_done(fn):
             fn()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_enrich_ss(self, e):
+        """透過 Semantic Scholar 補齊元資料（作者、期刊、年份、引用數）。"""
+        self._ss_status.value = "⏳ 查詢 Semantic Scholar..."
+        self._ss_status.color = "#0369A1"
+        self._page.update()
+
+        def _run():
+            try:
+                from ...api import semantic_scholar as ss_api
+                from ...database.sqlite_db import SQLiteDB
+                db = SQLiteDB()
+                p = self.paper
+
+                # 用 DOI 或標題查詢
+                result = None
+                if p.doi:
+                    result = ss_api.get_paper_by_doi(p.doi)
+                if not result and p.title:
+                    results = ss_api.search_papers(p.title, limit=1)
+                    if results:
+                        result = results[0]
+
+                if not result:
+                    self._ss_status.value = "⚠️ 找不到此論文的 Semantic Scholar 記錄"
+                    self._ss_status.color = "#D97706"
+                    self._page.update()
+                    return
+
+                updates: dict = {}
+                updated_fields = []
+
+                if not p.authors and result.get("authors"):
+                    updates["authors"] = [a.get("name", "") for a in result["authors"]]
+                    updated_fields.append("作者")
+                if not p.year and result.get("year"):
+                    updates["year"] = result["year"]
+                    updated_fields.append("年份")
+                if not p.venue and result.get("venue"):
+                    updates["venue"] = result["venue"]
+                    updated_fields.append("期刊")
+                if not p.citation_count and result.get("citationCount"):
+                    updates["citation_count"] = result["citationCount"]
+                    updated_fields.append(f"引用數({result['citationCount']})")
+                if not p.abstract and result.get("abstract"):
+                    updates["abstract"] = result["abstract"]
+                    updated_fields.append("摘要")
+
+                if updates:
+                    for k, v in updates.items():
+                        setattr(p, k, v)
+                    db.update(p)
+                    self._ss_status.value = f"✅ 補齊：{', '.join(updated_fields)}"
+                    self._ss_status.color = "#059669"
+                else:
+                    self._ss_status.value = "✓ 元資料已完整，無需補齊"
+                    self._ss_status.color = "#64748B"
+
+            except Exception as ex:
+                self._ss_status.value = f"❌ 補齊失敗：{ex}"
+                self._ss_status.color = "#EF4444"
+            self._page.update()
 
         threading.Thread(target=_run, daemon=True).start()
 

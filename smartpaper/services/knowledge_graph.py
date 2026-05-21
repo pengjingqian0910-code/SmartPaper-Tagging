@@ -12,7 +12,9 @@
 - 強化物理引擎（avoidOverlap + 更強排斥力）
 """
 
+import hashlib
 import json
+import pickle
 import tempfile
 import webbrowser
 from pathlib import Path
@@ -20,6 +22,9 @@ from typing import Optional
 
 from ..database.sqlite_db import SQLiteDB
 from ..models import Paper
+
+_GRAPH_CACHE_DIR = Path("data/graph_cache")
+_ADJ_CACHE_FILE  = Path("data/adj_cache.pkl")
 
 
 _PALETTE = [
@@ -63,6 +68,66 @@ def _color_by_citations(count: int, max_c: int) -> str:
 class KnowledgeGraphService:
     def __init__(self, sqlite_db: Optional[SQLiteDB] = None):
         self.db = sqlite_db or SQLiteDB()
+        # Adjacency cache: {(graph_type, min_shared): {paper_id: set(neighbor_ids)}}
+        self._adj_cache: dict[tuple, dict[int, set[int]]] = {}
+        self._adj_papers_sig: str = ""  # hash of paper ids for invalidation
+
+    # ── 鄰接表預計算（N-hop 加速）────────────────────────────────────────
+
+    def _papers_sig(self, papers: list) -> str:
+        return hashlib.md5(
+            ",".join(str(p.id) for p in papers).encode()
+        ).hexdigest()[:12]
+
+    def _get_adjacency(
+        self,
+        graph_type: str,
+        min_shared: int,
+        papers: list,
+    ) -> dict[int, set[int]]:
+        """回傳鄰接表，若 papers 集合未變則直接回傳快取。"""
+        sig = self._papers_sig(papers)
+        cache_key = (graph_type, min_shared)
+
+        if sig != self._adj_papers_sig:
+            self._adj_cache.clear()
+            self._adj_papers_sig = sig
+
+        if cache_key in self._adj_cache:
+            return self._adj_cache[cache_key]
+
+        adj: dict[int, set[int]] = {p.id: set() for p in papers}
+
+        if graph_type in ("tag", "concept"):
+            tag_sets = {p.id: set(p.tags or []) for p in papers}
+            pids = list(tag_sets)
+            for i in range(len(pids)):
+                for j in range(i + 1, len(pids)):
+                    if len(tag_sets[pids[i]] & tag_sets[pids[j]]) >= min_shared:
+                        adj[pids[i]].add(pids[j])
+                        adj[pids[j]].add(pids[i])
+
+        elif graph_type == "citation":
+            for p in papers:
+                refs = getattr(p, "references", None) or []
+                for ref_id in refs:
+                    if ref_id in adj:
+                        adj[p.id].add(ref_id)
+                        adj[ref_id].add(p.id)
+
+        self._adj_cache[cache_key] = adj
+        return adj
+
+    def invalidate_graph_cache(self) -> None:
+        """論文資料變動後清除圖譜 HTML 快取與鄰接表快取。"""
+        self._adj_cache.clear()
+        self._adj_papers_sig = ""
+        try:
+            if _GRAPH_CACHE_DIR.exists():
+                for f in _GRAPH_CACHE_DIR.glob("*.html"):
+                    f.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -229,6 +294,17 @@ class KnowledgeGraphService:
 
         if not papers:
             return ""
+
+        # ── HTML 快取（hash of inputs）────────────────────────────────────
+        if output_path is None:
+            _ids = sorted(p.id for p in papers)
+            _key = f"{graph_type}_{min_shared}_{color_by}_{layout}_{'_'.join(map(str, _ids))}"
+            _hash = hashlib.md5(_key.encode()).hexdigest()[:16]
+            _cached = _GRAPH_CACHE_DIR / f"{_hash}.html"
+            if _cached.exists():
+                return str(_cached)
+        else:
+            _cached = None
 
         tag_color = self._build_tag_color_map(papers)
         paper_map = {p.id: p for p in papers}
@@ -454,6 +530,10 @@ class KnowledgeGraphService:
         # ── Step 6: Save & inject interactivity ───────────────────────────
         if output_path:
             html_path = Path(output_path)
+        elif _cached is not None:
+            # 存入快取目錄
+            _GRAPH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            html_path = _cached
         else:
             tmp = tempfile.NamedTemporaryFile(
                 suffix=".html", prefix="smartpaper_graph_", delete=False
@@ -488,7 +568,7 @@ class KnowledgeGraphService:
         color_by: str = "tag",
         output_path: Optional[str] = None,
     ) -> str:
-        """只渲染中心論文的 N 跳鄰居，防止 300+ 節點卡死。"""
+        """只渲染中心論文的 N 跳鄰居（使用預計算鄰接表，防止 300+ 節點卡死）。"""
         papers = self.db.get_all(limit=5000)
         paper_map = {p.id: p for p in papers}
 
@@ -500,39 +580,8 @@ class KnowledgeGraphService:
                 output_path=output_path,
             )
 
-        # Build adjacency list
-        adj: dict[int, set[int]] = {p.id: set() for p in papers}
-
-        if graph_type == "tag":
-            tag_sets = {p.id: set(p.tags or []) for p in papers}
-            pids = list(tag_sets)
-            for i in range(len(pids)):
-                for j in range(i + 1, len(pids)):
-                    if len(tag_sets[pids[i]] & tag_sets[pids[j]]) >= min_shared:
-                        adj[pids[i]].add(pids[j])
-                        adj[pids[j]].add(pids[i])
-
-        elif graph_type == "concept":
-            import re as _re
-            def _concepts(p):
-                if not p.tags:
-                    return set()
-                return {t.lower().strip() for t in p.tags}
-            concept_sets = {p.id: _concepts(p) for p in papers}
-            pids = list(concept_sets)
-            for i in range(len(pids)):
-                for j in range(i + 1, len(pids)):
-                    if len(concept_sets[pids[i]] & concept_sets[pids[j]]) >= min_shared:
-                        adj[pids[i]].add(pids[j])
-                        adj[pids[j]].add(pids[i])
-
-        elif graph_type == "citation":
-            for p in papers:
-                refs = getattr(p, "references", None) or []
-                for ref_id in refs:
-                    if ref_id in adj:
-                        adj[p.id].add(ref_id)
-                        adj[ref_id].add(p.id)
+        # 使用預計算鄰接表（第一次 O(n²)，之後 O(1) 查快取）
+        adj = self._get_adjacency(graph_type, min_shared, papers)
 
         # BFS from center up to `hops` hops
         visited: set[int] = {center_paper_id}

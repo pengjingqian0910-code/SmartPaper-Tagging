@@ -393,6 +393,99 @@ class QAService:
         except Exception as e:
             return f"⚠️ LLM 呼叫失敗：{e}"
 
+    def _call_llm_stream(self, prompt: str):
+        """Gemini 串流生成，yield 每個文字 chunk。"""
+        try:
+            from google.genai import types as _gt
+            response = self._gemini.client.models.generate_content_stream(
+                model=self._gemini.model_name,
+                contents=prompt,
+            )
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"⚠️ LLM 串流失敗：{e}"
+
+    def ask_stream(
+        self,
+        question: str,
+        history: Optional[list[ChatMessage]] = None,
+        top_k: int = 5,
+        filter_paper_ids: Optional[set[int]] = None,
+        context_paper_ids: Optional[set[int]] = None,
+    ):
+        """
+        串流版問答：先 yield QAResult（answer=""，含 source_chunks），
+        再 yield str chunk（逐步累積答案），最後 yield None 表示結束。
+        呼叫端用法：
+            for item in service.ask_stream(question, ...):
+                if item is None:
+                    break
+                elif isinstance(item, QAResult):
+                    show_sources(item.source_chunks)
+                else:
+                    append_text(item)
+        """
+        history = history or []
+
+        # 意圖分類
+        intent, intent_conf = self._intent.classify(question)
+        if intent == "chitchat":
+            answer = self._chitchat_response(question)
+            yield QAResult(answer=answer, query=question,
+                           intent="chitchat", intent_conf=intent_conf)
+            yield None
+            return
+
+        # QA 語義快取（命中時一次性 yield，不串流）
+        if not history and not filter_paper_ids and not context_paper_ids:
+            sem_hit, cached = self._qa_cache.get(question)
+            if sem_hit and cached is not None:
+                cached.cache_hit = True
+                cached.cache_type = "semantic"
+                cached.intent = intent
+                cached.intent_conf = intent_conf
+                yield cached
+                yield None
+                return
+
+        # 完整 RAG pipeline
+        turn = self.memory.next_turn()
+        source_chunks = self._retrieve(
+            question, top_k=top_k,
+            filter_paper_ids=filter_paper_ids,
+            context_paper_ids=context_paper_ids,
+        )
+        context = self._build_context(source_chunks)
+        top_memories = self.memory.get_top_k(query=question, k=TOP_K_INJECT)
+        memory_text = self.memory.to_prompt(top_memories) if top_memories else ""
+        prompt = self._build_prompt(question, context, history, memory_text)
+
+        # 先送出 sources（answer 為空）讓 UI 先顯示來源區塊
+        meta_result = QAResult(
+            answer="",
+            source_chunks=source_chunks,
+            query=question,
+            intent=intent,
+            intent_conf=intent_conf,
+        )
+        yield meta_result
+
+        # 串流 LLM 輸出
+        full_answer = ""
+        for chunk in self._call_llm_stream(prompt):
+            full_answer += chunk
+            yield chunk
+
+        # 完成後更新 meta_result 並寫入快取
+        meta_result.answer = full_answer
+        self.skill.extract_async(turn, question, full_answer, source_chunks, self.memory)
+        if not history and not filter_paper_ids and not context_paper_ids:
+            self._qa_cache.put(question, meta_result)
+
+        yield None
+
     def suggest_followups(self, question: str, answer: str, n: int = 2) -> list[str]:
         """根據問題和回答，產生 n 個引導式追問建議"""
         prompt = (
