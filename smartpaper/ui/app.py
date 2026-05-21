@@ -14,6 +14,7 @@ from .views.writing_guide_view import WritingGuideView
 from .views.graph_view import GraphView
 from .views.literature_view import LiteratureView
 from .views.qa_view import QAView
+from .views.settings_view import SettingsView
 from . import theme as T
 
 
@@ -85,7 +86,7 @@ class SmartPaperApp:
             ),
             padding=ft.padding.symmetric(vertical=6, horizontal=8),
             border_radius=14,
-            on_click=lambda e, i=idx: self._on_nav_click(i),
+            on_click=lambda _e, i=idx: self._on_nav_click(i),
             tooltip=label,
         )
         return item
@@ -118,6 +119,8 @@ class SmartPaperApp:
             padding=ft.padding.symmetric(vertical=16),
         )
 
+        self._settings_btn = self._build_settings_btn()
+
         return ft.Container(
             content=ft.Column(
                 [
@@ -125,9 +128,14 @@ class SmartPaperApp:
                     ft.Container(height=1, bgcolor=T.CARD_BORDER, margin=ft.margin.symmetric(horizontal=12)),
                     ft.Container(height=8),
                     *self._nav_items_refs,
+                    ft.Container(expand=True),  # spacer
+                    ft.Container(height=1, bgcolor=T.CARD_BORDER, margin=ft.margin.symmetric(horizontal=12)),
+                    self._settings_btn,
+                    ft.Container(height=6),
                 ],
                 spacing=2,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                expand=True,
             ),
             width=76,
             bgcolor=T.SIDEBAR_BG,
@@ -138,6 +146,31 @@ class SmartPaperApp:
                 color="#0F000000",   # 6% black
                 offset=ft.Offset(4, 0),
             ),
+        )
+
+    def _build_settings_btn(self) -> ft.Container:
+        is_active = self._selected == -1  # -1 = settings
+        return ft.Container(
+            content=ft.Column([
+                ft.Container(
+                    content=ft.Icon(
+                        ft.icons.SETTINGS if is_active else ft.icons.SETTINGS_OUTLINED,
+                        color=T.ACCENT if is_active else T.TEXT_M,
+                        size=20,
+                    ),
+                    width=46, height=40, border_radius=12,
+                    bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
+                    alignment=ft.alignment.center,
+                ),
+                ft.Text("設定", size=10,
+                        weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
+                        color=T.ACCENT if is_active else T.TEXT_M,
+                        text_align=ft.TextAlign.CENTER),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=3, tight=True),
+            padding=ft.padding.symmetric(vertical=6, horizontal=8),
+            border_radius=14,
+            on_click=self._on_settings_click,
+            tooltip="設定",
         )
 
     # ── Navigation ────────────────────────────────────────────────────
@@ -151,6 +184,7 @@ class SmartPaperApp:
         self.graph_view = GraphView(self.page)
         self.literature_view = LiteratureView(self.page)
         self.qa_view = QAView(self.page)
+        self.settings_view = SettingsView(self.page)
 
         try:
             home_content = self.home_view.build()
@@ -180,6 +214,20 @@ class SmartPaperApp:
             )
         )
 
+    def _on_settings_click(self, e):
+        self._selected = -1
+        for i, (icon_on, icon_off, label) in enumerate(_NAV_ICON_NAMES):
+            new_item = self._build_nav_item(i, icon_on, icon_off, label)
+            self._nav_items_refs[i].content = new_item.content
+            self._nav_items_refs[i].on_click = new_item.on_click
+        new_btn = self._build_settings_btn()
+        self._settings_btn.content = new_btn.content
+        try:
+            self.content_area.content = self.settings_view.build()
+        except Exception as ex:
+            self.content_area.content = ft.Text(str(ex), color=ft.colors.RED_700)
+        self.page.update()
+
     def _on_nav_click(self, index: int):
         self._selected = index
         # rebuild all nav items to update active state
@@ -187,6 +235,9 @@ class SmartPaperApp:
             new_item = self._build_nav_item(i, icon_on, icon_off, label)
             self._nav_items_refs[i].content = new_item.content
             self._nav_items_refs[i].on_click = new_item.on_click
+        # reset settings button
+        new_btn = self._build_settings_btn()
+        self._settings_btn.content = new_btn.content
 
         views = [
             self.home_view,
@@ -256,7 +307,7 @@ class ModelPrewarmer:
 
         self._set_status("")
 
-    def _set_status(self, msg: str):
+    def _set_status(self, _msg: str):
         pass  # overlay removed; prewarming runs silently in background
 
 

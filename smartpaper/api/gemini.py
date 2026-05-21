@@ -8,6 +8,7 @@ import re
 from typing import Optional, TYPE_CHECKING
 from google import genai
 
+from .. import config as _cfg
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_TAG_CATEGORIES
 from ..models import TaggingResult
 
@@ -20,7 +21,7 @@ class GeminiTagger:
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or GEMINI_API_KEY
-        self.model_name = model or GEMINI_MODEL
+        self._fixed_model = model  # None 表示動態讀 config
 
         if not self.api_key:
             raise ValueError(
@@ -28,6 +29,10 @@ class GeminiTagger:
             )
 
         self.client = genai.Client(api_key=self.api_key)
+
+    @property
+    def model_name(self) -> str:
+        return self._fixed_model or _cfg.GEMINI_MODEL
 
     def generate_tags(
         self,
