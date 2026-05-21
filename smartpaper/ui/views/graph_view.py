@@ -1,8 +1,9 @@
 """
 知識圖譜視圖（重新設計版）
-- 年份趨勢圖
-- 標籤分布圖（可互動：點擊標籤看其年份分布）
-- 知識圖譜生成（移除 GestureDetector）
+- 年份趨勢圖（漸層色條）
+- 標籤分布圖（同調色盤 + 百分比）
+- 統計卡片（新增「唯一標籤數」第 4 張）
+- 知識圖譜生成（color_by / layout 下拉選單）
 - BibTeX / RIS 匯出
 - 論文去重
 """
@@ -25,8 +26,34 @@ BORDER   = "#E2E8F0"
 TEXT_H   = "#1E293B"
 TEXT_M   = "#475569"
 TEXT_S   = "#94A3B8"
-BAR_COL  = "#6366F1"
-BAR_SEL  = "#F59E0B"   # 選中的 bar 顏色
+BAR_SEL  = "#F59E0B"
+
+# Mirror of _PALETTE in knowledge_graph.py — used for tag bar colours
+_TAG_PALETTE = [
+    "#6366f1", "#f28e2b", "#e15759", "#76b7b2",
+    "#59a14f", "#edc948", "#b07aa1", "#ff9da7",
+    "#9c755f", "#bab0ac",
+]
+
+
+def _lerp_hex(c1: str, c2: str, t: float) -> str:
+    """Linear interpolate between two hex colours."""
+    def parse(c):
+        c = c.lstrip("#")
+        return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    r1, g1, b1 = parse(c1)
+    r2, g2, b2 = parse(c2)
+    r = int(r1 + (r2 - r1) * t)
+    g = int(g1 + (g2 - g1) * t)
+    b = int(b1 + (b2 - b1) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _year_bar_color(year: int, min_y: int, max_y: int) -> str:
+    """Cool blue (old) → warm amber (recent)."""
+    span = max(max_y - min_y, 1)
+    t = (year - min_y) / span
+    return _lerp_hex("#60a5fa", "#f59e0b", t)
 
 
 def _section(title: str, icon: str, children: list, color=ACCENT) -> ft.Container:
@@ -122,6 +149,9 @@ class GraphView:
     # ── 統計卡片 ──────────────────────────────────────────────────────
 
     def _build_stats(self, stats: dict) -> ft.Row:
+        # Compute unique tag count
+        unique_tags = len({t for p in self._papers for t in (p.tags or [])})
+
         def card(label, value, color, bg):
             return ft.Container(
                 content=ft.Column([
@@ -132,13 +162,14 @@ class GraphView:
                 border=ft.border.all(1, BORDER),
                 border_radius=10,
                 bgcolor=bg,
-                width=130,
+                width=140,
             )
 
         return ft.Row([
             card("論文總數", stats.get("total_papers", 0), ACCENT, "#EEF2FF"),
             card("有引用資料", stats.get("with_citations", 0), TEAL, "#F0FDFA"),
             card("有概念索引", stats.get("with_concepts", 0), "#7C3AED", "#F5F3FF"),
+            card("唯一標籤數", unique_tags, ORANGE, "#FFFBEB"),
         ], spacing=12)
 
     # ── 年份趨勢圖 ────────────────────────────────────────────────────
@@ -152,18 +183,22 @@ class GraphView:
             )
 
         max_count = max(year_dist.values(), default=1)
-        max_h = 90
+        max_h = 120
+        sorted_years = sorted(year_dist.keys())
+        min_y, max_y = sorted_years[0], sorted_years[-1]
 
         bars = []
-        for year in sorted(year_dist.keys()):
+        for year in sorted_years:
             count = year_dist[year]
             bar_h = max(4, int(count / max_count * max_h))
+            bar_color = _year_bar_color(year, min_y, max_y)
             bars.append(ft.Column([
                 ft.Text(str(count), size=9, color=TEXT_M),
-                ft.Container(width=26, height=bar_h, bgcolor=ACCENT,
-                             border_radius=ft.border_radius.only(top_left=3, top_right=3)),
-                ft.Text(str(year), size=9, color=TEXT_S,
-                        rotate=ft.Rotate(0.5)),
+                ft.Container(
+                    width=32, height=bar_h, bgcolor=bar_color,
+                    border_radius=ft.border_radius.only(top_left=4, top_right=4),
+                ),
+                ft.Text(str(year), size=9, color=TEXT_S, rotate=ft.Rotate(0.5)),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2))
 
         return _section("論文發表年份趨勢", "bar_chart", [
@@ -176,10 +211,9 @@ class GraphView:
     # ── 標籤分析（分布 + 年份互動）────────────────────────────────────
 
     def _build_tag_analysis(self) -> ft.Container:
-        # 計算 tag 出現次數
         tag_counter: Counter = Counter()
         for p in self._papers:
-            for t in p.tags:
+            for t in (p.tags or []):
                 tag_counter[t] += 1
 
         if not tag_counter:
@@ -189,22 +223,23 @@ class GraphView:
 
         top_tags = tag_counter.most_common(25)
         max_count = top_tags[0][1]
+        total_count = sum(c for _, c in top_tags)
 
         # 計算每個 tag 的年份分布
         tag_year: dict[str, Counter] = defaultdict(Counter)
         for p in self._papers:
             if p.year:
-                for t in p.tags:
+                for t in (p.tags or []):
                     tag_year[t][p.year] += 1
 
-        # 右側年份圖（初始空）
         self._selected_tag_label = ft.Text("← 點擊左側標籤查看其年份分布",
                                            size=12, color=TEXT_S, italic=True)
         self._tag_year_chart = ft.Column([self._selected_tag_label], spacing=6)
 
-        # 左側水平條狀圖
         def make_bar(tag, count, idx):
-            bar_w_max = 200
+            bar_w_max = 180
+            bar_color = _TAG_PALETTE[idx % len(_TAG_PALETTE)]
+            pct = count / total_count * 100 if total_count else 0
 
             def on_click(e, t=tag):
                 self._on_tag_click(t, tag_year.get(t, {}))
@@ -219,10 +254,10 @@ class GraphView:
                     ft.Container(
                         width=int(count / max_count * bar_w_max),
                         height=16,
-                        bgcolor=BAR_COL,
+                        bgcolor=bar_color,
                         border_radius=3,
                     ),
-                    ft.Text(str(count), size=11, color=TEXT_M),
+                    ft.Text(f"{count} ({pct:.1f}%)", size=11, color=TEXT_M),
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.padding.symmetric(vertical=4, horizontal=8),
                 border_radius=6,
@@ -267,7 +302,6 @@ class GraphView:
             self.page.update()
             return
 
-        # 補齊最早～最新之間每一年（缺的補 0）
         min_year = min(year_dist.keys())
         max_year = max(year_dist.keys())
         full_dist = {y: year_dist.get(y, 0) for y in range(min_year, max_year + 1)}
@@ -303,7 +337,6 @@ class GraphView:
     # ── 知識圖譜生成 ──────────────────────────────────────────────────
 
     def _build_graph_section(self) -> ft.Container:
-        # 論文勾選清單
         self._graph_paper_selected: dict[int, ft.Checkbox] = {}
         self._all_graph_papers: dict[int, object] = {p.id: p for p in self._papers}
 
@@ -356,6 +389,21 @@ class GraphView:
             label="最少共享數", value="1", width=110,
             options=[ft.dropdown.Option(str(n), f"≥{n}") for n in [1, 2, 3, 5]],
         )
+        self.color_by_dd = ft.Dropdown(
+            label="節點顏色", value="tag", width=140,
+            options=[
+                ft.dropdown.Option("tag",       "依標籤"),
+                ft.dropdown.Option("year",      "依年份"),
+                ft.dropdown.Option("citations", "依引用數"),
+            ],
+        )
+        self.layout_dd = ft.Dropdown(
+            label="佈局方式", value="physics", width=160,
+            options=[
+                ft.dropdown.Option("physics",      "力導向（推薦）"),
+                ft.dropdown.Option("hierarchical", "層次佈局"),
+            ],
+        )
 
         gen_btn = ft.ElevatedButton(
             "在瀏覽器開啟互動圖譜",
@@ -369,7 +417,6 @@ class GraphView:
                 "勾選要分析的論文，點擊節點可高亮其關聯論文，支援拖拽 / 縮放",
                 size=11, color=TEXT_S,
             ),
-            # 論文選取
             ft.Row([
                 self._graph_search,
                 ft.TextButton("全選", on_click=_sel_all),
@@ -383,15 +430,18 @@ class GraphView:
                 padding=8,
                 bgcolor=BG,
             ),
-            # 圖譜類型 + 按鈕
             ft.Row([
                 self.graph_type,
                 self.min_shared_dd,
+            ], spacing=10, wrap=True),
+            ft.Row([
+                self.color_by_dd,
+                self.layout_dd,
                 gen_btn,
             ], spacing=10, wrap=True),
             ft.Text(
-                "節點大小∝引用數　顏色∝主要標籤　邊=共享關聯\n"
-                "互動操作：滾輪縮放 · 拖拽節點 · 單擊高亮鄰居 · 雙擊還原",
+                "節點大小∝引用數　顏色可選標籤/年份/引用數　邊=共享關聯\n"
+                "互動操作：滾輪縮放 · 拖拽節點 · 單擊高亮鄰居 · 雙擊還原 · Esc 重置",
                 size=10, color=TEXT_S,
             ),
         ])
@@ -421,6 +471,8 @@ class GraphView:
                 graph_type=self.graph_type.value,
                 min_shared=int(self.min_shared_dd.value or "1"),
                 paper_ids=selected_ids,
+                color_by=self.color_by_dd.value or "tag",
+                layout=self.layout_dd.value or "physics",
             )
             if not html_path:
                 self.status.value = "沒有足夠資料建立圖譜（請確認論文有標籤）"
