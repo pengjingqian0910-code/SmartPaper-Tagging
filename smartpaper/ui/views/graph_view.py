@@ -232,7 +232,114 @@ class GraphView:
             card("🏛 經典主題", classic_n,                    CLASSIC_COLOR,  "#EFF6FF"),
         ], spacing=10, wrap=True)
 
-    # ── 年份趨勢圖（修正版：無旋轉、步距跳躍、固定錨點）────────────
+    # ── 共用：Stack-based 底部基線柱狀圖（解決 Row top-align 錨點漂移）──
+
+    def _render_bar_chart(
+        self,
+        year_dist: dict,
+        chart_h: int = 100,
+        bar_w: int = 26,
+        gap: int = 5,
+        max_labels: int = 10,
+        count_labels: bool = True,
+    ) -> ft.Control:
+        """
+        以 ft.Stack 絕對定位繪製柱狀圖。
+        所有柱子 bottom-anchored → 年份標籤永遠在同一基線上。
+        年份密集（> max_labels）時自動旋轉 -30° 並加大底部空間。
+        """
+        if not year_dist:
+            return ft.Text("無年份資料", size=11, color=TEXT_S, italic=True)
+
+        sorted_years = sorted(year_dist.keys())
+        n = len(sorted_years)
+        max_c = max(year_dist.values(), default=1)
+        min_y_val = sorted_years[0]
+        max_y_val = sorted_years[-1]
+
+        # ── 動態 step：最多顯示 max_labels 個標籤 ──────────────────────
+        step = max(1, math.ceil(n / max_labels))
+
+        # ── 超過 12 根才旋轉，旋轉角度 -30°（≈ -0.524 rad）────────────
+        do_rotate = n > 12
+        # 旋轉後標籤的視覺高度估算：sin(30°)×text_w + cos(30°)×8px ≈ 20
+        label_h = 26 if do_rotate else 18
+        count_label_h = 14 if count_labels else 0
+
+        stack_h = chart_h + label_h + count_label_h
+        stack_w = gap + n * (bar_w + gap)
+
+        items: list[ft.Control] = []
+
+        for i, year in enumerate(sorted_years):
+            count = year_dist.get(year, 0)
+            x = gap + i * (bar_w + gap)
+            bar_h = max(3, int(count / max_c * chart_h)) if count > 0 else 3
+            bar_color = _year_bar_color(year, min_y_val, max_y_val) if count > 0 else "#D1D5DB"
+            show_label = (i % step == 0) or (i == n - 1)
+
+            # ── 柱體（bottom 錨定到標籤區頂端）────────────────────────
+            items.append(ft.Container(
+                width=bar_w, height=bar_h,
+                bgcolor=bar_color,
+                left=x,
+                bottom=label_h,
+                border_radius=ft.border_radius.only(top_left=3, top_right=3),
+                tooltip=f"{year}：{count} 篇",
+            ))
+
+            # ── 數量標籤（緊貼柱頂上方）────────────────────────────────
+            if count_labels and count > 0:
+                items.append(ft.Container(
+                    content=ft.Text(
+                        str(count), size=8, color=TEXT_M,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    width=bar_w, height=count_label_h,
+                    left=x,
+                    bottom=label_h + bar_h + 1,
+                    alignment=ft.alignment.bottom_center,
+                ))
+
+            # ── 年份標籤（全部在同一基線）──────────────────────────────
+            if show_label:
+                label_text = ft.Text(
+                    str(year), size=8, color=TEXT_S,
+                    text_align=ft.TextAlign.CENTER,
+                )
+                if do_rotate:
+                    # 旋轉 -30°，錨點設在 top_center（= 柱底正下方）
+                    label_inner = ft.Container(
+                        content=label_text,
+                        width=bar_w, height=label_h,
+                        rotate=ft.Rotate(
+                            angle=-0.524,                    # -30°
+                            alignment=ft.alignment.top_center,
+                        ),
+                        alignment=ft.alignment.top_center,
+                    )
+                else:
+                    label_inner = ft.Container(
+                        content=label_text,
+                        width=bar_w, height=label_h,
+                        alignment=ft.alignment.top_center,
+                    )
+
+                items.append(ft.Container(
+                    content=label_inner,
+                    left=x, bottom=0,
+                    width=bar_w, height=label_h,
+                ))
+
+        stack = ft.Stack(controls=items, width=stack_w, height=stack_h)
+
+        return ft.Container(
+            content=ft.Row([stack], scroll=ft.ScrollMode.AUTO),
+            height=stack_h + 8,
+            padding=ft.padding.only(top=4, bottom=4),
+        )
+
+    # ── 年份趨勢圖 ────────────────────────────────────────────────────
 
     def _build_year_trend(self, stats: dict) -> ft.Container:
         year_dist = stats.get("year_distribution", {})
@@ -242,47 +349,11 @@ class GraphView:
                 padding=12,
             )
 
-        sorted_years = sorted(year_dist.keys())
-        n = len(sorted_years)
-        max_count = max(year_dist.values(), default=1)
-        max_h = 100
-        min_y, max_y_val = sorted_years[0], sorted_years[-1]
-
-        # ★ 最多顯示 10 個標籤，避免密集
-        step = max(1, math.ceil(n / 10))
-
-        bars = []
-        for i, year in enumerate(sorted_years):
-            count = year_dist[year]
-            bar_h = max(4, int(count / max_count * max_h))
-            bar_color = _year_bar_color(year, min_y, max_y_val)
-            show_label = (i % step == 0) or (i == n - 1)
-
-            bars.append(ft.Column([
-                # 數量標籤
-                ft.Text(str(count), size=9, color=TEXT_M),
-                # 柱體
-                ft.Container(
-                    width=28, height=bar_h, bgcolor=bar_color,
-                    border_radius=ft.border_radius.only(top_left=4, top_right=4),
-                    tooltip=f"{year}：{count} 篇",
-                ),
-                # ★ 固定高度標籤區（不旋轉 → 無錨點偏移）
-                ft.Container(
-                    width=28, height=22,
-                    content=ft.Text(
-                        str(year) if show_label else "",
-                        size=8, color=TEXT_S,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
-                    alignment=ft.alignment.top_center,
-                ),
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2))
-
         return _section("論文發表年份趨勢", "bar_chart", [
-            ft.Container(
-                content=ft.Row(bars, spacing=3, scroll=ft.ScrollMode.AUTO),
-                padding=ft.padding.only(top=8, bottom=4),
+            self._render_bar_chart(
+                year_dist,
+                chart_h=100, bar_w=26, gap=5,
+                max_labels=10, count_labels=True,
             ),
         ])
 
@@ -498,39 +569,19 @@ class GraphView:
 
         min_year = min(year_dist.keys())
         max_year = max(year_dist.keys())
+        # Fill gaps so every year in range appears
         full_dist = {y: year_dist.get(y, 0) for y in range(min_year, max_year + 1)}
-
-        max_c = max(full_dist.values(), default=1)
-        max_h = 75
-        n = len(full_dist)
-        step = max(1, math.ceil(n / 8))
-
-        bars = []
-        for i, year in enumerate(sorted(full_dist.keys())):
-            cnt = full_dist[year]
-            h = max(2, int(cnt / max_c * max_h)) if cnt > 0 else 2
-            bar_color = BAR_SEL if cnt > 0 else "#E2E8F0"
-            show_label = (i % step == 0) or (i == n - 1)
-            bars.append(ft.Column([
-                ft.Text(str(cnt) if cnt > 0 else "", size=9, color=TEXT_M),
-                ft.Container(width=22, height=h, bgcolor=bar_color,
-                             border_radius=ft.border_radius.only(top_left=3, top_right=3)),
-                ft.Container(
-                    width=22, height=20,
-                    content=ft.Text(str(year) if show_label else "", size=8, color=TEXT_S,
-                                    text_align=ft.TextAlign.CENTER),
-                    alignment=ft.alignment.top_center,
-                ),
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2))
-
         total = sum(year_dist.values())
-        span = max_year - min_year + 1
+
         return ft.Column([
-            ft.Text(f"「{tag}」年份分布（共 {total} 篇，{min_year}–{max_year}）",
-                    size=12, weight=ft.FontWeight.W_600, color=TEXT_H),
-            ft.Container(
-                content=ft.Row(bars, spacing=3, scroll=ft.ScrollMode.AUTO),
-                padding=ft.padding.only(top=6),
+            ft.Text(
+                f"「{tag}」年份分布（共 {total} 篇，{min_year}–{max_year}）",
+                size=12, weight=ft.FontWeight.W_600, color=TEXT_H,
+            ),
+            self._render_bar_chart(
+                full_dist,
+                chart_h=70, bar_w=22, gap=4,
+                max_labels=8, count_labels=True,
             ),
         ], spacing=6)
 
