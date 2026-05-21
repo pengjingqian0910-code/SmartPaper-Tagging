@@ -414,71 +414,84 @@ class WritingGuideService:
                 "paper":             paper,
             })
 
-        # ── 外部論文建議：所有缺口都抓（有 DOI 用 Semantic Scholar，其他用 arXiv）
+        # ── 外部論文建議：優先用 arXiv 直接關鍵字搜尋（最相關），再補 SS 推薦
         prog(f"Step 3-2b：外部論文搜尋（{len(concept_paper_pairs)} 個缺口）...")
         arxiv_api = ArxivAPI()
         for cp in concept_paper_pairs:
             suggestions: list[dict] = []
+            query = f"{cp['concept']} {cp['reason']}"
+            # 主力：arXiv 直接關鍵字搜尋（摘要最完整）
+            try:
+                arxiv_recs = arxiv_api.search_by_keywords(query, n_results=3)
+                for r in arxiv_recs:
+                    r["source"] = "arXiv"
+                suggestions.extend(arxiv_recs)
+            except Exception:
+                pass
+            # 補充：若本地論文有 DOI → Semantic Scholar 推薦
             local_paper = cp["paper"]
-            # 優先：本地論文有 DOI → Semantic Scholar 推薦
-            if local_paper and local_paper.doi:
+            if len(suggestions) < 3 and local_paper and local_paper.doi:
                 try:
-                    ss_recs = ss_api.fetch_recommendations(local_paper.doi, n=3)
+                    ss_recs = ss_api.fetch_recommendations(local_paper.doi,
+                                                           n=3 - len(suggestions))
                     for r in ss_recs:
                         r["source"] = "Semantic Scholar"
                     suggestions.extend(ss_recs)
                 except Exception:
                     pass
-            # 補充（或 fallback）：arXiv 關鍵字搜尋
-            if len(suggestions) < 3:
-                try:
-                    query = f"{cp['concept']} {cp['reason']}"
-                    arxiv_recs = arxiv_api.search_by_keywords(query, n_results=3 - len(suggestions))
-                    for r in arxiv_recs:
-                        r["source"] = "arXiv"
-                    suggestions.extend(arxiv_recs)
-                except Exception:
-                    pass
             cp["external_suggestions"] = suggestions
 
-        # ── Call 2：生成具體寫作範例 ───────────────────────────────────
+        # ── Call 2：生成具體寫作範例（基於外部論文摘要，產出完整段落）────
         prog("Step 3-3：AI 生成寫作範例...")
         pairs_text = ""
         for i, cp in enumerate(concept_paper_pairs, 1):
+            ext_block = ""
+            for j, ext in enumerate(cp.get("external_suggestions", [])[:2], 1):
+                ext_abs = (ext.get("abstract") or "")[:300]
+                ext_block += (
+                    f"   外部文獻{j}：{ext.get('title', '')} "
+                    f"({ext.get('year', '')}，{ext.get('source', '')})\n"
+                    f"   摘要：{ext_abs}\n"
+                )
             if cp["paper"]:
-                abstract_preview = (cp["paper"].abstract or "")[:250]
+                abstract_preview = (cp["paper"].abstract or "")[:300]
                 pairs_text += (
                     f"{i}. 概念：{cp['concept']}\n"
-                    f"   論文：{cp['paper'].title}\n"
-                    f"   摘要片段：{abstract_preview}\n\n"
+                    f"   理由：{cp['reason']}\n"
+                    f"   文獻庫論文：{cp['paper'].title}\n"
+                    f"   摘要：{abstract_preview}\n"
+                    f"{ext_block}\n"
                 )
             else:
                 pairs_text += (
                     f"{i}. 概念：{cp['concept']}\n"
-                    f"   （文獻庫中暫無對應論文，請考慮補充外部文獻）\n\n"
+                    f"   理由：{cp['reason']}\n"
+                    f"   （文獻庫中暫無對應論文）\n"
+                    f"{ext_block}\n"
                 )
 
-        prompt2 = f"""你是學術寫作助理，請為以下每個「概念缺口」生成一段具體的學術寫作範例。
+        prompt2 = f"""你是資深學術寫作顧問，請為以下每個「概念缺口」生成一段完整的學術寫作示範段落。
 
 論文大綱：
 {outline_text}
 
-概念缺口與對應論文：
+概念缺口與可參考文獻（含外部文獻摘要）：
 {pairs_text}
 
-對於每個有對應論文的概念缺口，請生成：
-1. 一段 30-60 字的示範寫作句子（以「基於」、「根據」、「依據」、「X研究指出」等學術用語開頭，自然融入引用概念）
-2. 說明這段文字適合放在論文的哪個位置/如何銜接
-
-對於沒有對應論文的概念缺口，說明建議補充什麼類型的外部文獻。
+請依據上述可用文獻（優先參考外部文獻的摘要內容），為每個概念缺口生成：
+1. 一段 **80-150 字**的完整學術寫作示範段落，需包含 3-4 句：
+   - 第 1 句：點出此概念在學術脈絡的重要性（可帶入作者/年份）
+   - 第 2-3 句：具體說明該概念的核心方法、發現或理論，自然融入引用
+   - 第 4 句：說明此概念與本論文研究問題的關聯，承接下一段
+2. 一句說明此段落適合放在大綱哪個位置及如何銜接
 
 以 JSON 格式回答：
 {{
     "examples": [
         {{
             "index": 1,
-            "writing_example": "示範寫作句子（有論文的情況）",
-            "placement_tip": "建議放在哪個段落的哪個位置，以及如何與前後文銜接（25字以內）"
+            "writing_example": "完整示範段落（80-150字，3-4句，展示具體學術論述方式）",
+            "placement_tip": "建議位置與銜接說明（30字以內）"
         }}
     ]
 }}

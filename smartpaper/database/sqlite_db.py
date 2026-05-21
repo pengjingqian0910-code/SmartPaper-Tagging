@@ -121,6 +121,33 @@ class SQLiteDB:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_concepts_paper ON paper_concepts(paper_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_concepts_concept ON paper_concepts(concept_id)")
 
+            # ── 對話 Session 持久化表 ──────────────────────────────────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    intent_tag TEXT DEFAULT '',
+                    is_cached INTEGER DEFAULT 0,
+                    sources TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_msgs_session "
+                "ON chat_messages(session_id)"
+            )
+
             conn.commit()
 
     @contextmanager
@@ -695,3 +722,71 @@ class SQLiteDB:
                 "SELECT pdf_path FROM papers WHERE id = ?", (paper_id,)
             ).fetchone()
         return row["pdf_path"] if row and row["pdf_path"] else None
+
+    # ── Chat Session CRUD ─────────────────────────────────────────────
+
+    def save_chat_session(self, session_id: str, title: str) -> None:
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """INSERT INTO chat_sessions (session_id, title, created_at, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(session_id)
+                   DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at""",
+                (session_id, title, now, now),
+            )
+            conn.commit()
+
+    def get_chat_sessions(self) -> list[dict]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 20"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_chat_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        intent_tag: str = "",
+        is_cached: bool = False,
+        sources: str = "",
+    ) -> int:
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO chat_messages
+                   (session_id, role, content, intent_tag, is_cached, sources, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, role, content, intent_tag, int(is_cached), sources, now),
+            )
+            conn.execute(
+                "UPDATE chat_sessions SET updated_at=? WHERE session_id=?",
+                (now, session_id),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def get_chat_messages(self, session_id: str) -> list[dict]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM chat_messages WHERE session_id=? ORDER BY created_at",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_chat_session(self, session_id: str) -> None:
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+            conn.execute("DELETE FROM chat_sessions WHERE session_id=?", (session_id,))
+            conn.commit()
+
+    def update_chat_session_title(self, session_id: str, title: str) -> None:
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET title=?, updated_at=? WHERE session_id=?",
+                (title, now, session_id),
+            )
+            conn.commit()

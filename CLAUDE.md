@@ -10,6 +10,8 @@
 - AI 自動生成標籤（Google Gemini）
 - 語意搜尋（ChromaDB 向量資料庫）
 - 論文分類與 RAG 總結
+- 問論文（Classic RAG + Function Calling，含 Session SQLite 持久化）
+- 寫作引用導引（三步驟，外部論文優先，生成完整學術寫作範例）
 
 ## 技術架構
 
@@ -21,9 +23,9 @@ smartpaper/
 │   ├── gemini.py           # Gemini LLM（標籤、問答；model_name 動態讀 config）
 │   ├── crossref.py         # Crossref — DOI / 摘要查詢
 │   ├── arxiv.py            # arXiv — 快速匯入 + 外部論文建議
-│   └── semantic_scholar.py # 論文推薦 + 引用關係抓取
+│   └── semantic_scholar.py # 論文推薦 + 引用關係 + get_paper_by_doi + search_papers
 ├── database/
-│   ├── sqlite_db.py        # SQLite — 論文 metadata（LRU 快取）
+│   ├── sqlite_db.py        # SQLite — 論文 metadata + chat_sessions/chat_messages 表
 │   ├── vector_db.py        # ChromaDB — 向量搜尋（singleton embedding）
 │   └── chunk_store.py      # PDF 全文 chunk 儲存
 ├── processing/
@@ -38,7 +40,7 @@ smartpaper/
 │   ├── qa_service_fc.py    # Function Calling 問答（手動 FC loop）
 │   ├── qa_skill.py         # 對話技能萃取
 │   ├── conversation_memory.py  # 時間衰減對話記憶
-│   ├── writing_guide.py    # 寫作引用導引（含 SS + arXiv 外部建議）
+│   ├── writing_guide.py    # 寫作引用導引（外部論文優先 + 完整範例段落）
 │   ├── classifier.py       # 論文分類（semantic / two_stage / llm）
 │   ├── literature_analyzer.py  # 文獻回顧分析
 │   ├── knowledge_graph.py  # 知識圖譜
@@ -53,21 +55,24 @@ smartpaper/
     ├── theme.py            # 顏色 / 字體常數
     └── views/
         ├── home_view.py
-        ├── papers_view.py       # 論文管理 + 推薦相似論文
+        ├── papers_view.py       # 論文管理：虛擬化 ListView + 批次操作
         ├── search_view.py
-        ├── classify_view.py
+        ├── classify_view.py     # 分類：背景 Thread + ProgressBar
         ├── writing_guide_view.py
-        ├── graph_view.py
+        ├── graph_view.py        # 知識圖譜：WebView 內嵌 + 年份互動
         ├── literature_view.py
-        ├── qa_view.py           # 問論文（Classic RAG + Function Calling）
-        └── settings_view.py     # API Key 與模型設定
+        ├── qa_view.py           # 問論文：Session SQLite 持久化 + Markdown 匯出
+        └── settings_view.py     # API Key（含連線測試）與模型設定
 ```
 
 ## 資料庫
 
 ### SQLite (`data/papers.db`)
 - 自動初始化，無需手動設定
-- 表格：`papers` (id, title, abstract, doi, tags, source, created_at, updated_at)
+- 表格：
+  - `papers` (id, title, abstract, doi, tags, authors, venue, year, citation_count, source, created_at, updated_at)
+  - `chat_sessions` (session_id TEXT PK, title, created_at, updated_at)
+  - `chat_messages` (id, session_id FK, role, content, intent_tag, is_cached, sources, created_at)
 
 ### ChromaDB (`data/chroma/`)
 - 自動初始化，無需手動設定
@@ -90,15 +95,63 @@ python main.py list                   # 列出論文
 python main.py tags                   # 列出所有標籤
 python main.py stats                  # 統計資訊
 python main.py export -o out.xlsx     # 匯出
-python main.py classify <topics...>   # 論文分類 (新增)
-python main.py suggest-topics         # 建議分類主題 (新增)
+python main.py classify <topics...>   # 論文分類
+python main.py suggest-topics         # 建議分類主題
+python main.py write-guide '引言' '方法' '實驗'  # 寫作引用導引
 python main.py ui                     # 啟動圖形介面
 ```
 
-## 新增功能：論文分類系統
+## 各頁面功能摘要
 
-### 功能說明
-讓用戶輸入主題關鍵字（如 "Machine Learning", "Healthcare"），系統會分類論文並生成總結。
+### P1 首頁（home_view.py）
+- Excel 匯入（含進度條）、DOI/arXiv 快速匯入
+- 論文統計儀表板
+- arXiv 外部論文建議（依文獻庫標籤）
+
+### P2 論文管理（papers_view.py）
+- **虛擬化 ListView**：`ft.ListView(expand=True, item_extent=120)`，百篇論文無卡頓
+- **批次操作**：全選 Tristate Checkbox、批次刪除、批次重標籤
+- 論文詳細資料 Dialog（可展開摘要、編輯標籤、刪除、查看 PDF 狀態）
+- Semantic Scholar 自動補齊元資料（作者/年份/期刊/引用數）
+
+### P3 語意搜尋（search_view.py）
+- 混合搜尋（向量 + BM25），CrossEncoder 重排
+- 支援 filter by tag、filter by year
+
+### P4 論文分類（classify_view.py）
+- 三種分類方法（semantic / two_stage / llm）
+- **背景 Thread 執行**，`ProgressBar` 顯示進度（0→1）
+
+### P5 寫作引用導引（writing_guide_view.py）
+三步驟流程：
+1. **搜尋候選論文**：向量搜尋 + CrossEncoder 重排，使用者確認候選清單
+2. **AI 分析引用**：LLM 判斷每篇是否引用、引用時機、概念、段落位置
+3. **缺口補強**：
+   - **外部論文優先**：arXiv 關鍵字搜尋（最直接相關），SS 推薦補充
+   - **完整寫作範例**：LLM 基於外部論文摘要生成 80-150 字、3-4 句學術段落
+   - 文獻庫對應論文作為次要資訊
+   - 「加入文獻庫」按鈕在論文標題列內嵌
+
+### P6 知識圖譜（graph_view.py）
+- **內嵌 WebView**：生成 pyvis HTML 後直接在 App 內預覽，可選「另開瀏覽器」
+- **年份柱狀圖互動**：點擊柱體/數字/年份標籤均觸發篩選，顯示該年論文清單
+- 聚焦模式（N 跳鄰居圖譜）、標籤分析（共現 / 演進趨勢）、去重、匯出 BibTeX / RIS
+
+### P7 文獻回顧（literature_view.py）
+- 自動生成比較表（方法 / 資料集 / 指標）
+
+### P8 問論文（qa_view.py）
+- Classic RAG（串流）與 Function Calling 兩種模式
+- 多 Session 管理（最多 5 個），標籤欄位
+- **SQLite 持久化**：每筆問答自動寫入 `chat_messages`，Session 標題自動更新
+- **匯出 Markdown**：點擊下載按鈕，生成完整對話記錄（含引用來源）
+- 追問建議 Chip、APA / MLA 引用一鍵複製
+
+### P9 設定（settings_view.py）
+- Gemini API Key 輸入 + **連線測試**（Ping Gemini，綠色勾 / 紅色叉）
+- 模型選擇（即時生效）
+
+## 論文分類系統
 
 ### 三種分類方法
 
@@ -108,130 +161,31 @@ python main.py ui                     # 啟動圖形介面
 | `two_stage` | **先搜標題，再用 LLM 分析摘要** ★推薦 | 中等 | 高 |
 | `llm` | 每篇論文都用 LLM 判斷 | 最慢 | 最高 |
 
-### 兩階段 RAG 流程（two_stage）
+## 寫作引用導引（Step 3 設計）
 
 ```
-1. 搜尋標題 → 用關鍵字/標籤/語意搜尋找候選論文
-2. 取得摘要 → 從 SQLite 取得這些論文的摘要
-3. LLM 分析 → 用 Gemini 分析摘要，判斷是否真的屬於該主題
-4. 生成總結 → 用 RAG 為每個主題生成總結
+缺口補強流程：
+1. LLM 找出 3-5 個 missing concepts（概念缺口）
+2. 對每個概念：
+   a. arXiv 直接關鍵字搜尋（主力，摘要完整）
+   b. SS 推薦補充（需有本地 DOI）
+   c. 向量搜尋文獻庫對應論文
+3. 將外部論文摘要送入 LLM → 生成 80-150 字完整學術段落
+4. UI 展示：外部論文（含加入文獻庫）→ 寫作範例 → 文獻庫對應
 ```
-
-### 相關檔案
-- `smartpaper/services/classifier.py` - 分類服務
-  - `classify_by_topics()` - 語意搜尋分類
-  - `classify_two_stage()` - 兩階段 RAG 分類 ★
-  - `classify_with_llm()` - 純 LLM 分類
-  - `_check_paper_relevance()` - LLM 判斷論文相關性
-  - `generate_topic_summary()` - RAG 生成總結
-- `smartpaper/ui/views/classify_view.py` - 分類介面
-- `main.py` - CLI 指令 `classify` 和 `suggest-topics`
-
-### 使用方式
-```bash
-# CLI - 兩階段 RAG（預設，推薦）
-python main.py classify "Machine Learning" "Healthcare" "NLP"
-
-# CLI - 指定分類方法
-python main.py classify "Deep Learning" -m semantic    # 快速
-python main.py classify "Deep Learning" -m two_stage   # 推薦
-python main.py classify "Deep Learning" -m llm         # 最精確
-
-# CLI - 顯示論文與主題的關聯摘要
-python main.py classify "共享經濟" --show-details
-
-# CLI - 根據標籤排序
-python main.py sort-tags                    # 按標籤數量排序
-python main.py sort-tags -s tag_alpha       # 按標籤字母排序
-python main.py sort-tags -g                 # 按標籤分組顯示
-python main.py sort-tags -t "Machine Learning"  # 只顯示特定標籤
-
-# CLI - 匯出分類報告到 Excel
-python main.py export-classify "Machine Learning" "Healthcare" -o report.xlsx
-
-# UI
-python main.py ui  # 點選「分類」頁籤，選擇分類方法
-```
-
-### 功能 1：論文與主題關聯摘要
-
-當使用兩階段分類（two_stage）時，每篇論文會生成一段說明，解釋這篇論文與該主題的關聯性。
-
-例如，論文被分類到「共享經濟」主題時：
-```
-論文：Platform Business Models in the Sharing Economy
-關聯摘要：這篇論文探討共享經濟平台的商業模式，分析了 Uber、Airbnb 等平台
-        如何透過數位科技連結供需雙方，並討論其對傳統產業的影響。
-```
-
-### 功能 2：按標籤排序分組
-
-可以用多種方式檢視論文的標籤分佈：
-- 按標籤數量排序（找出標籤最多/最少的論文）
-- 按標籤字母排序
-- 按標籤分組顯示（看每個標籤下有哪些論文）
 
 ## 開發注意事項
 
-1. **不是 RAG 問答系統**：目前 LLM 只用於標籤生成和分類總結，沒有開放式問答
-2. **不是 MCP/Skills 架構**：流程是固定的，LLM 不會自己決定要呼叫哪些工具
-3. **Flet 框架**：UI 用 Flet（純 Python），不是 React + Flask
-
-## 新增功能：寫作引用導引
-
-### 功能說明
-用戶輸入論文大綱（各段落標題/描述），系統為每個段落推薦應引用哪些論文及其核心概念，並說明應放在段落哪個位置。
-
-### 核心流程
-
-```
-1. 用戶輸入大綱段落（如「引言：背景介紹」「方法：模型架構」）
-2. 對每個段落進行語意搜尋（ChromaDB）
-3. CrossEncoder re-ranking 篩選最相關論文
-4. LLM（Gemini）一次分析所有候選，返回：
-   - 是否引用
-   - 引用時機（30字）
-   - 引用概念（25字）
-   - 段落位置（開頭/中間/結尾）
-5. 可匯出 Markdown 格式
-```
-
-### 相關檔案
-- `smartpaper/services/writing_guide.py` - 核心服務
-  - `WritingGuideService` - 主服務類
-  - `generate_section_guide()` - 單段落分析
-  - `generate_outline_guide()` - 整份大綱分析
-  - `export_guide_to_markdown()` - 匯出 Markdown
-- `smartpaper/ui/views/writing_guide_view.py` - UI（第5個 tab）
-- `main.py` - CLI 指令 `write-guide`
-
-### 使用方式
-```bash
-# CLI
-python main.py write-guide '引言：深度學習在醫療影像的應用背景' '相關工作：現有方法與局限' '方法：提出的模型架構'
-
-# CLI - 指定候選論文數量並匯出
-python main.py write-guide '引言' '方法' '實驗' -n 12 -o guide.md
-
-# UI
-python main.py ui  # 點選「寫作導引」tab
-```
-
-### 輸出格式範例
-```
-段落：引言：深度學習在醫療影像的應用背景
-寫作建議：應涵蓋深度學習的發展脈絡、醫療影像的挑戰...
-
-→ 論文：Attention U-Net: Learning Where to Look...
-  引用時機：說明 U-Net 變體如何改進分割性能
-  引用概念：Attention gate 機制用於聚焦關鍵區域
-  段落位置：中間論述
-```
+1. **Flet 框架**：UI 用 Flet（純 Python），不是 React + Flask
+2. **虛擬化列表**：`ft.ListView(item_extent=120)` 要求 item 高度固定，expandable card 需改用 Dialog 展開
+3. **Thread 安全**：`page.update()` 在背景 Thread 中直接呼叫即可，無需 `run_task`
+4. **Stack 點擊區域**：Stack 中後加入的控件在上層，若不設 on_click 會吞掉點擊事件
+5. **SQLite 年份型別**：`p.year` 從 DB 讀回應為 int，比較前仍建議 `int()` 強制轉換
 
 ## 待辦 / 可擴展方向
 
-- [ ] 加入 RAG 問答功能（讓用戶用自然語言問問題）
 - [ ] 加入 MCP/Skills（讓 LLM 自己決定要執行哪些操作）
 - [ ] 改用 React + Flask 架構（如果需要 Web 版本）
 - [ ] 批次匯入多個 Excel 檔案
-- [ ] 論文推薦功能
+- [ ] home_view PDF 匯入進度條（`_pdf_progress_bar`）
+- [ ] settings_view 儲存按鈕在驗證失敗後 disable

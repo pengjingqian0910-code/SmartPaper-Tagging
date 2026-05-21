@@ -10,13 +10,14 @@
 | **AI 自動標籤** | Gemini 分析摘要，生成結構化標籤 |
 | **PDF 全文解析** | 章節感知分割，Methodology / Results 優先 |
 | **混合語意搜尋** | ChromaDB 向量 + BM25 關鍵字，CrossEncoder 重排 |
-| **RAG 問答** | Classic RAG 與 Function Calling 兩種模式，多輪對話，APA / MLA 引用一鍵複製 |
+| **RAG 問答** | Classic RAG 與 Function Calling 兩種模式，多輪對話，APA / MLA 引用一鍵複製，對話記錄 SQLite 持久化，匯出 Markdown |
 | **論文推薦** | 本地相似論文 + Semantic Scholar / arXiv 外部推薦，一鍵加入文獻庫 |
-| **寫作引用導引** | 輸入大綱，推薦引用論文、段落位置與寫作範例 |
-| **分類系統** | 語意 / 兩階段 RAG / LLM 三種分類方法 |
-| **知識圖譜** | 論文概念關係視覺化 |
+| **寫作引用導引** | 三步驟引導：候選論文搜尋 → AI 分析引用 → 缺口補強。第三步優先展示外部高相關論文（arXiv），AI 根據其摘要生成 80-150 字完整學術寫作範例，可一鍵加入文獻庫 |
+| **論文管理** | 虛擬化列表（百篇無卡頓）、批次選取 / 刪除 / 重標籤、自動補齊元資料 |
+| **分類系統** | 語意 / 兩階段 RAG / LLM 三種分類方法，背景執行含進度條 |
+| **知識圖譜** | 論文關係互動視覺化（內嵌 WebView）、年份柱狀圖點擊篩選該年論文 |
 | **文獻分析** | 自動生成文獻回顧比較表 |
-| **設定頁面** | 管理 Gemini API Key 與模型選擇（即時生效） |
+| **設定頁面** | 管理 Gemini API Key（含連線測試）與模型選擇（即時生效） |
 
 ## 快速開始
 
@@ -85,7 +86,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 僅首次
 | tkinter | 內建 | `brew install python-tk@3.11` |
 | Gemini API Key | 免費取得：[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) | 同左 |
 
-API Key 可在程式內「設定」頁面隨時更換。
+API Key 可在程式內「設定」頁面隨時更換，並可即時測試連線是否有效。
 
 ## CLI 指令
 
@@ -121,9 +122,9 @@ SmartPaper-Tagging/
     │   ├── gemini.py        # Gemini LLM（標籤、問答、分類）
     │   ├── crossref.py      # Crossref — DOI / 摘要查詢
     │   ├── arxiv.py         # arXiv — 快速匯入 + 外部論文建議
-    │   └── semantic_scholar.py  # 論文推薦 + 引用關係
+    │   └── semantic_scholar.py  # 論文推薦 + 引用關係 + 單篇查詢
     ├── database/
-    │   ├── sqlite_db.py     # SQLite — 論文 metadata
+    │   ├── sqlite_db.py     # SQLite — 論文 metadata + 對話 Session 持久化
     │   ├── vector_db.py     # ChromaDB — 向量搜尋
     │   └── chunk_store.py   # PDF 全文 chunk 儲存
     ├── processing/
@@ -136,7 +137,7 @@ SmartPaper-Tagging/
     │   ├── reranker.py      # CrossEncoder 重排
     │   ├── qa_service.py    # Classic RAG 問答
     │   ├── qa_service_fc.py # Function Calling 問答
-    │   ├── writing_guide.py # 寫作引用導引
+    │   ├── writing_guide.py # 寫作引用導引（三步驟 + 外部論文優先）
     │   ├── classifier.py    # 論文分類（三種方法）
     │   ├── literature_analyzer.py  # 文獻回顧分析
     │   ├── knowledge_graph.py      # 知識圖譜
@@ -152,13 +153,13 @@ SmartPaper-Tagging/
         ├── theme.py         # 顏色 / 字體常數
         └── views/
             ├── home_view.py
-            ├── papers_view.py       # 論文管理 + 推薦相似論文
+            ├── papers_view.py       # 論文管理（虛擬化列表 + 批次操作）
             ├── search_view.py
-            ├── classify_view.py
+            ├── classify_view.py     # 分類（背景執行 + 進度條）
             ├── writing_guide_view.py
-            ├── graph_view.py
+            ├── graph_view.py        # 知識圖譜（WebView + 年份互動）
             ├── literature_view.py
-            ├── qa_view.py           # 問論文（含 Function Calling 模式）
+            ├── qa_view.py           # 問論文（Session 持久化 + Markdown 匯出）
             └── settings_view.py     # API Key 與模型設定
 ```
 
@@ -172,7 +173,7 @@ SmartPaper-Tagging/
 | 關鍵字搜尋 | BM25（`rank-bm25`） |
 | 重排 | CrossEncoder（`cross-encoder/ms-marco-MiniLM-L-6-v2`） |
 | PDF 解析 | pymupdf4llm（主）+ pdfplumber（fallback） |
-| 資料庫 | SQLite + ChromaDB |
+| 資料庫 | SQLite（論文 metadata + 對話記錄）+ ChromaDB（向量） |
 | 外部文獻 | Semantic Scholar API、arXiv API（免費，無需 Key） |
 
 ## License

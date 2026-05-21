@@ -57,6 +57,15 @@ def _year_bar_color(year: int, min_y: int, max_y: int) -> str:
     return _lerp_hex("#60a5fa", "#f59e0b", t)
 
 
+def _chip(label: str, bg: str, color: str, size: int = 10) -> ft.Container:
+    return ft.Container(
+        content=ft.Text(label, size=size, color=color),
+        bgcolor=bg,
+        border_radius=10,
+        padding=ft.padding.symmetric(horizontal=6, vertical=2),
+    )
+
+
 def _section(title: str, icon: str, children: list, color=ACCENT) -> ft.Container:
     return ft.Container(
         content=ft.Column([
@@ -85,6 +94,14 @@ class GraphView:
         self._right_content: Optional[ft.Column] = None
         self._right_header: Optional[ft.Column] = None
         self._mode_btn_containers: dict[str, ft.Container] = {}
+        # 年份點擊篩選
+        self._year_filter_col: Optional[ft.Column] = None
+        # 內嵌 WebView（知識圖譜）
+        self._webview: Optional[ft.WebView] = None
+        self._webview_container: Optional[ft.Container] = None
+
+        # Last generated graph path (for "另開瀏覽器")
+        self._last_html_path: Optional[str] = None
 
         # Precomputed
         self._cooccur: dict[str, Counter] = {}
@@ -242,6 +259,7 @@ class GraphView:
         gap: int = 5,
         max_labels: int = 10,
         count_labels: bool = True,
+        on_bar_click=None,          # Optional[Callable[[int], None]]
     ) -> ft.Control:
         """
         以 ft.Stack 絕對定位繪製柱狀圖。
@@ -285,10 +303,12 @@ class GraphView:
                 left=x,
                 bottom=label_h,
                 border_radius=ft.border_radius.only(top_left=3, top_right=3),
-                tooltip=f"{year}：{count} 篇",
+                tooltip=f"{year}：{count} 篇（點擊篩選）",
+                on_click=(lambda e, y=year: on_bar_click(y)) if on_bar_click else None,
+                ink=bool(on_bar_click),
             ))
 
-            # ── 數量標籤（緊貼柱頂上方）────────────────────────────────
+            # ── 數量標籤（緊貼柱頂上方，同樣可點擊）──────────────────
             if count_labels and count > 0:
                 items.append(ft.Container(
                     content=ft.Text(
@@ -299,9 +319,10 @@ class GraphView:
                     left=x,
                     bottom=label_h + bar_h + 1,
                     alignment=ft.alignment.bottom_center,
+                    on_click=(lambda e, y=year: on_bar_click(y)) if on_bar_click else None,
                 ))
 
-            # ── 年份標籤（全部在同一基線）──────────────────────────────
+            # ── 年份標籤（全部在同一基線，同樣可點擊）─────────────────
             if show_label:
                 label_text = ft.Text(
                     str(year), size=8, color=TEXT_S,
@@ -329,6 +350,7 @@ class GraphView:
                     content=label_inner,
                     left=x, bottom=0,
                     width=bar_w, height=label_h,
+                    on_click=(lambda e, y=year: on_bar_click(y)) if on_bar_click else None,
                 ))
 
         stack = ft.Stack(controls=items, width=stack_w, height=stack_h)
@@ -349,13 +371,84 @@ class GraphView:
                 padding=12,
             )
 
+        self._year_filter_col = ft.Column([], spacing=6)
+
+        def on_year_click(year: int):
+            self._show_year_papers(year)
+
         return _section("論文發表年份趨勢", "bar_chart", [
+            ft.Text("點擊柱狀圖可篩選該年份的論文", size=10, color=TEXT_S, italic=True),
             self._render_bar_chart(
                 year_dist,
                 chart_h=100, bar_w=26, gap=5,
                 max_labels=10, count_labels=True,
+                on_bar_click=on_year_click,
             ),
+            self._year_filter_col,
         ])
+
+    def _show_year_papers(self, year):
+        """點擊年份柱後，在趨勢圖下方顯示該年論文清單。"""
+        try:
+            year = int(year)
+        except (TypeError, ValueError):
+            return
+        papers_in_year = [p for p in self._papers
+                          if p.year is not None and int(p.year) == year]
+        if not papers_in_year:
+            self._year_filter_col.controls = [
+                ft.Text(f"{year} 年無論文", size=11, color=TEXT_S, italic=True)
+            ]
+            self.page.update()
+            return
+
+        items: list[ft.Control] = [
+            ft.Row([
+                ft.Icon("event_note", size=14, color=ACCENT),
+                ft.Text(f"{year} 年共 {len(papers_in_year)} 篇論文",
+                        size=12, weight=ft.FontWeight.W_600, color=TEXT_H),
+                ft.Container(expand=True),
+                ft.Container(
+                    content=ft.Text("✕ 收起", size=10, color=TEXT_S),
+                    on_click=lambda e: self._clear_year_filter(),
+                    padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                    border_radius=4,
+                    bgcolor=BG,
+                    ink=True,
+                ),
+            ], spacing=6),
+        ]
+        for p in papers_in_year[:12]:
+            auth = (p.authors[0] + " et al." if (p.authors and len(p.authors) > 1)
+                    else (p.authors[0] if p.authors else "作者不詳"))
+            items.append(ft.Container(
+                content=ft.Column([
+                    ft.Text(p.title[:75] + ("…" if len(p.title) > 75 else ""),
+                            size=12, color=TEXT_H, weight=ft.FontWeight.W_500),
+                    ft.Row([
+                        ft.Text(auth, size=10, color=TEXT_M),
+                        *([ ft.Text(f"｜引用 {p.citation_count}", size=10, color=TEXT_S)]
+                          if p.citation_count else []),
+                        *([_chip(t, "#EEF2FF", "#4F46E5", 9)
+                           for t in (p.tags or [])[:2]]),
+                    ], spacing=6),
+                ], spacing=3),
+                bgcolor="#EFF6FF",
+                border=ft.border.all(1, "#BFDBFE"),
+                border_radius=6,
+                padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            ))
+        if len(papers_in_year) > 12:
+            items.append(ft.Text(f"…另有 {len(papers_in_year) - 12} 篇，請至論文管理查看",
+                                 size=10, color=TEXT_S))
+
+        self._year_filter_col.controls = items
+        self.page.update()
+
+    def _clear_year_filter(self):
+        if self._year_filter_col:
+            self._year_filter_col.controls = []
+            self.page.update()
 
     # ── 標籤分析（三模式右面板）──────────────────────────────────────
 
@@ -829,10 +922,53 @@ class GraphView:
         )
 
         gen_btn = ft.ElevatedButton(
-            "在瀏覽器開啟互動圖譜",
-            icon="open_in_browser",
+            "生成並預覽圖譜",
+            icon="hub",
             on_click=self._on_gen_graph,
             style=ft.ButtonStyle(bgcolor=ACCENT, color="#FFFFFF"),
+        )
+        open_browser_btn = ft.OutlinedButton(
+            "另開瀏覽器",
+            icon="open_in_browser",
+            on_click=self._on_open_graph_browser,
+            style=ft.ButtonStyle(color=ACCENT),
+        )
+
+        # ── 內嵌 WebView ──────────────────────────────────────────────
+        try:
+            self._webview = ft.WebView(url="about:blank", expand=True)
+        except Exception:
+            self._webview = None
+
+        self._webview_status_text = ft.Text(
+            "生成圖譜後將在此預覽（需系統安裝 WebView2 / WebKit）",
+            size=11, color=TEXT_S, italic=True,
+        )
+        self._webview_container = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon("preview", size=14, color=TEAL),
+                    ft.Text("內嵌圖譜預覽", size=12, weight=ft.FontWeight.W_600, color=TEXT_H),
+                    ft.Container(expand=True),
+                    self._webview_status_text,
+                ], spacing=8),
+                ft.Container(
+                    content=self._webview if self._webview else ft.Text(
+                        "⚠️ 系統不支援內嵌 WebView，請使用「另開瀏覽器」",
+                        size=12, color=TEXT_M,
+                    ),
+                    height=420,
+                    border=ft.border.all(1, BORDER),
+                    border_radius=8,
+                    bgcolor=BG,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                ),
+            ], spacing=6),
+            visible=False,
+            bgcolor=CARD,
+            border=ft.border.all(1, BORDER),
+            border_radius=12,
+            padding=16,
         )
 
         return _section("知識圖譜視覺化（互動）", "bubble_chart", [
@@ -852,12 +988,14 @@ class GraphView:
                 bgcolor=BG,
             ),
             ft.Row([self.graph_type, self.min_shared_dd], spacing=10, wrap=True),
-            ft.Row([self.color_by_dd, self.layout_dd, gen_btn], spacing=10, wrap=True),
+            ft.Row([self.color_by_dd, self.layout_dd, gen_btn, open_browser_btn],
+                   spacing=10, wrap=True),
             ft.Text(
                 "節點大小∝度中心性　顏色可選標籤/年份/引用數　邊=共享關聯\n"
                 "互動操作：滾輪縮放 · 拖拽節點 · 單擊高亮鄰居 · 圖例點擊閃爍 · Esc 重置",
                 size=10, color=TEXT_S,
             ),
+            self._webview_container,
         ])
 
     def _on_graph_search(self, e):
@@ -891,15 +1029,36 @@ class GraphView:
             if not html_path:
                 self.status.value = "沒有足夠資料建立圖譜（請確認論文有標籤）"
                 return
-            import webbrowser
-            webbrowser.open(f"file:///{html_path}")
-            self.status.value = f"已在瀏覽器開啟互動圖譜（{len(selected_ids)} 篇論文）"
+
+            self._last_html_path = str(html_path)
+            file_url = f"file:///{str(html_path).replace(chr(92), '/')}"
+
+            if self._webview is not None:
+                self._webview.url = file_url
+                self._webview_container.visible = True
+                self._webview_status_text.value = f"已載入：{Path(html_path).name}"
+                self.status.value = f"圖譜已在下方預覽（{len(selected_ids)} 篇論文）"
+            else:
+                import webbrowser
+                webbrowser.open(file_url)
+                self.status.value = f"已在瀏覽器開啟互動圖譜（{len(selected_ids)} 篇論文）"
         except Exception as ex:
             import traceback
             self.status.value = f"圖譜生成失敗：{ex}"
             traceback.print_exc()
         finally:
             self._set_idle()
+
+    def _on_open_graph_browser(self, e):
+        if not self._last_html_path:
+            self.status.value = "請先生成圖譜"
+            self.page.update()
+            return
+        import webbrowser
+        file_url = f"file:///{self._last_html_path.replace(chr(92), '/')}"
+        webbrowser.open(file_url)
+        self.status.value = f"已在瀏覽器開啟：{Path(self._last_html_path).name}"
+        self.page.update()
 
     # ── 聚焦模式（N 跳鄰居圖譜）─────────────────────────────────────
 
@@ -989,9 +1148,19 @@ class GraphView:
             if not html_path:
                 self.status.value = "鄰居圖譜為空（請確認論文有標籤或引用關係）"
                 return
-            import webbrowser
-            webbrowser.open(f"file:///{html_path}")
-            self.status.value = f"已開啟聚焦圖譜：「{title_snippet}」{hops} 跳鄰居"
+
+            self._last_html_path = str(html_path)
+            file_url = f"file:///{str(html_path).replace(chr(92), '/')}"
+
+            if self._webview is not None:
+                self._webview.url = file_url
+                self._webview_container.visible = True
+                self._webview_status_text.value = f"已載入：{Path(html_path).name}"
+                self.status.value = f"聚焦圖譜已預覽：「{title_snippet}」{hops} 跳鄰居"
+            else:
+                import webbrowser
+                webbrowser.open(file_url)
+                self.status.value = f"已開啟聚焦圖譜：「{title_snippet}」{hops} 跳鄰居"
         except Exception as ex:
             import traceback
             self.status.value = f"聚焦圖譜生成失敗：{ex}"

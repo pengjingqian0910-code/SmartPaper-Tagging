@@ -857,7 +857,7 @@ class HomeView:
                 query = " OR ".join(top_tags[:3])
                 from ...api.arxiv import ArxivAPI
                 arxiv = ArxivAPI()
-                results = arxiv.search(query, max_results=8)
+                results = arxiv.search_by_keywords(query, n_results=8)
 
                 existing_titles = {p.title.lower().strip() for p in papers}
                 new_results = [

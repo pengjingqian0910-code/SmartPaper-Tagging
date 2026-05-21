@@ -10,7 +10,8 @@ from typing import Optional
 
 BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
 REC_URL  = "https://api.semanticscholar.org/recommendations/v1/papers/forpaper"
-FIELDS = "title,externalIds,year,authors,abstract"
+FIELDS       = "title,externalIds,year,authors,abstract"
+DETAIL_FIELDS = "title,externalIds,year,authors,abstract,venue,citationCount"
 REQUEST_DELAY = 0.5   # 秒，避免觸發 rate limit（100 req/5s）
 
 
@@ -39,6 +40,61 @@ def _parse_ref_entry(entry: dict, key: str) -> Optional[dict]:
         "doi": ext.get("DOI") or ext.get("doi"),
         "year": paper.get("year"),
     }
+
+
+def get_paper_by_doi(doi: str) -> Optional[dict]:
+    """
+    以 DOI 查詢單篇論文的詳細資訊。
+
+    Returns:
+        {"title", "authors": [{"name":...}], "year", "venue", "abstract",
+         "citationCount", "doi"} 或 None
+    """
+    url = f"{BASE_URL}/DOI:{doi}"
+    data = _get(url, {"fields": DETAIL_FIELDS})
+    time.sleep(REQUEST_DELAY)
+    if not data:
+        return None
+    ext = data.get("externalIds") or {}
+    return {
+        "title":         data.get("title", ""),
+        "authors":       data.get("authors") or [],
+        "year":          data.get("year"),
+        "venue":         data.get("venue", ""),
+        "abstract":      data.get("abstract", ""),
+        "citationCount": data.get("citationCount", 0),
+        "doi":           ext.get("DOI") or ext.get("doi") or doi,
+    }
+
+
+def search_papers(query: str, limit: int = 5) -> list[dict]:
+    """
+    以標題關鍵字搜尋 Semantic Scholar。
+
+    Returns:
+        list of {"title", "authors", "year", "venue", "abstract",
+                 "citationCount", "doi"}
+    """
+    url = f"{BASE_URL}/search"
+    data = _get(url, {"query": query, "fields": DETAIL_FIELDS, "limit": limit})
+    time.sleep(REQUEST_DELAY)
+    if not data:
+        return []
+    results = []
+    for paper in data.get("data", []):
+        if not paper.get("title"):
+            continue
+        ext = paper.get("externalIds") or {}
+        results.append({
+            "title":         paper.get("title", ""),
+            "authors":       paper.get("authors") or [],
+            "year":          paper.get("year"),
+            "venue":         paper.get("venue", ""),
+            "abstract":      paper.get("abstract", ""),
+            "citationCount": paper.get("citationCount", 0),
+            "doi":           ext.get("DOI") or ext.get("doi"),
+        })
+    return results
 
 
 def fetch_references(doi: str) -> list[dict]:

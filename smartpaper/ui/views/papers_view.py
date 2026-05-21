@@ -598,7 +598,7 @@ class PapersView:
         self.papers: List[Paper] = []
         self._fulltext_ids: set[int] = set()
         self.current_page = 0
-        self.page_size = 25
+        self.page_size = 200  # ListView item_extent 虛擬化，一次加載全部
         self.selected_tag: Optional[str] = None
         self._sort_by = "id"
         self._sort_dir = 1
@@ -612,6 +612,12 @@ class PapersView:
         self._visible_fields: set = set(_ALL_FIELDS)
         self._custom_fields: list = self._load_custom_fields()
         self._custom_field_values: dict = self._load_custom_field_values()
+        # 批次選取狀態
+        self._selected_ids: set[int] = set()
+        self._select_all_cb: Optional[ft.Checkbox] = None
+        self._batch_row: Optional[ft.Row] = None
+        self._batch_count_text: Optional[ft.Text] = None
+        self._list_view: Optional[ft.ListView] = None
 
     # ── Build ─────────────────────────────────────────────────────────
 
@@ -686,7 +692,29 @@ class PapersView:
         self._count_text = ft.Text("", size=13, color=AUTH_C)
         self._pagination_text = ft.Text("", size=12, color=META_C)
 
-        self._list_col = ft.Column(spacing=8)
+        # ── 虛擬化列表（item_extent=120 只渲染可見項目）────────────────
+        self._list_view = ft.ListView(expand=True, item_extent=120, spacing=4)
+
+        # ── 全選 + 批次操作 UI ────────────────────────────────────────
+        self._select_all_cb = ft.Checkbox(
+            label="全選", tristate=True, value=False,
+            on_change=self._on_select_all,
+        )
+        self._batch_count_text = ft.Text("", size=12, color=AUTH_C)
+        self._batch_row = ft.Row([
+            self._batch_count_text,
+            ft.ElevatedButton(
+                "批次刪除", icon="delete_outline",
+                style=ft.ButtonStyle(bgcolor=RED, color="#FFFFFF"),
+                on_click=self._on_batch_delete,
+            ),
+            ft.ElevatedButton(
+                "批次重標籤", icon="auto_awesome",
+                style=ft.ButtonStyle(bgcolor="#7C3AED", color="#FFFFFF"),
+                on_click=self._on_batch_retag,
+            ),
+        ], spacing=8, visible=False)
+
         self._refresh_list()
 
         # 分頁
@@ -739,6 +767,7 @@ class PapersView:
         # 篩選列
         filter_row = ft.Container(
             content=ft.Row([
+                self._select_all_cb,
                 self._search_field,
                 self.tag_dropdown,
                 self.sort_dd,
@@ -753,9 +782,10 @@ class PapersView:
         return ft.Column([
             header,
             filter_row,
-            self._list_col,
+            self._batch_row,
+            self._list_view,      # 虛擬化 ListView — 自行處理滾動
             pagination_row,
-        ], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+        ], spacing=12, expand=True)  # 外層不加 scroll，避免巢狀滾動衝突
 
     # ── Data ──────────────────────────────────────────────────────────
 
@@ -796,17 +826,8 @@ class PapersView:
         self._count_text.value = f"共 {total} 篇論文"
         self._pagination_text.value = f"第 {self.current_page + 1} / {total_pages} 頁"
 
-        self._list_col.controls = [
-            _Card(
-                p, self._on_delete, self._on_tag_remove, self.page,
-                has_fulltext=(p.id in self._fulltext_ids),
-                on_read_fulltext=self._on_read_fulltext,
-                search_service=self.search_service,
-                pipeline=self.pipeline,
-                visible_fields=self._visible_fields,
-                custom_fields=self._custom_fields,
-                custom_field_values=self._custom_field_values,
-            ).build()
+        self._list_view.controls = [
+            self._build_paper_tile(p)
             for p in page_papers
         ]
 
@@ -1352,6 +1373,256 @@ class PapersView:
                 subprocess.Popen(["xdg-open", str(path)])
         except Exception as ex:
             self._snack(f"無法開啟 PDF：{ex}", error=True)
+
+    # ── 固定高度 Tile（120px）——用於 ListView 虛擬化 ──────────────────
+
+    def _build_paper_tile(self, paper: Paper) -> ft.Container:
+        p = paper
+        auth = (p.authors[0] + (" et al." if len(p.authors) > 1 else "")) if p.authors else "作者不詳"
+        has_fulltext = p.id in self._fulltext_ids
+
+        cb = ft.Checkbox(
+            value=p.id in self._selected_ids,
+            on_change=lambda e, pid=p.id: self._on_card_check(pid, e.control.value),
+        )
+
+        badges: list[ft.Control] = []
+        if p.year:
+            badges.append(_chip(str(p.year), YEAR_BG, YEAR_C, 9))
+        if p.source:
+            badges.append(_chip(p.source, SRC_BG, SRC_C, 9))
+        if p.citation_count:
+            badges.append(_chip(f"引用{p.citation_count}", "#FEF3C7", "#D97706", 9))
+        for t in (p.tags or [])[:3]:
+            badges.append(_tag_chip(t))
+        if len(p.tags or []) > 3:
+            badges.append(ft.Text(f"+{len(p.tags) - 3}", size=9, color=META_C))
+
+        del_btn = ft.Container(
+            content=ft.Text("刪除", size=9, color=RED),
+            on_click=lambda e, pp=p: self._on_delete(pp),
+            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            border_radius=4,
+            border=ft.border.all(1, "#FECACA"),
+            bgcolor="#FFF5F5",
+            tooltip="刪除此論文",
+        )
+        detail_btn = ft.Container(
+            content=ft.Row([
+                ft.Text("詳細資訊", size=9, color=ACCENT),
+                ft.Icon("chevron_right", size=11, color=ACCENT),
+            ], spacing=2, tight=True),
+            on_click=lambda e, pp=p: self._open_card_dialog(pp),
+            padding=ft.padding.symmetric(horizontal=7, vertical=2),
+            border_radius=4,
+            border=ft.border.all(1, "#C7D2FE"),
+            bgcolor="#EEF2FF",
+            tooltip="查看摘要、DOI、相似論文等詳細資訊",
+        )
+        fulltext_icon = ft.Container(
+            content=ft.Icon("menu_book", size=11, color="#065F46"),
+            padding=ft.padding.symmetric(horizontal=4, vertical=2),
+            border_radius=4,
+            bgcolor="#ECFDF5",
+            tooltip="已上傳全文 PDF",
+        ) if has_fulltext else ft.Container(width=0)
+
+        return ft.Container(
+            content=ft.Row([
+                cb,
+                ft.Column([
+                    ft.Row([
+                        ft.Text(p.title, size=13, weight=ft.FontWeight.W_600, color=TITLE_C,
+                                expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                        fulltext_icon,
+                        del_btn,
+                    ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.START),
+                    ft.Text(auth, size=11, color=AUTH_C, max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.Row(badges, spacing=4, wrap=False),
+                    ft.Row([ft.Container(expand=True), detail_btn]),
+                ], spacing=4, expand=True),
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            height=110,
+            padding=ft.padding.symmetric(horizontal=14, vertical=8),
+            border=ft.border.all(1, BORDER),
+            border_radius=10,
+            bgcolor=CARD,
+            shadow=ft.BoxShadow(blur_radius=3, spread_radius=0,
+                                color="#06000000", offset=ft.Offset(0, 1)),
+        )
+
+    def _open_card_dialog(self, paper: Paper):
+        """開啟詳細資訊 Dialog（含展開式 _Card）。"""
+        has_fulltext = paper.id in self._fulltext_ids
+        card_ctrl = _Card(
+            paper, self._on_delete, self._on_tag_remove, self.page,
+            has_fulltext=has_fulltext,
+            on_read_fulltext=self._on_read_fulltext,
+            search_service=self.search_service,
+            pipeline=self.pipeline,
+            visible_fields=self._visible_fields,
+            custom_fields=self._custom_fields,
+            custom_field_values=self._custom_field_values,
+        ).build()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                paper.title[:60] + ("…" if len(paper.title) > 60 else ""),
+                size=14, weight=ft.FontWeight.W_600, color=TITLE_C,
+            ),
+            content=ft.Container(
+                content=ft.Column([card_ctrl], scroll=ft.ScrollMode.AUTO),
+                width=700, height=520,
+            ),
+            actions=[
+                ft.TextButton("關閉", on_click=lambda e: self._close_dlg(dlg)),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dlg
+        dlg.open = True
+        self.page.update()
+
+    # ── 批次選取 ─────────────────────────────────────────────────────
+
+    def _on_select_all(self, e):
+        start = self.current_page * self.page_size
+        page_ids = {p.id for p in self.papers[start:start + self.page_size]}
+        if e.control.value is True:
+            self._selected_ids.update(page_ids)
+        elif e.control.value is False:
+            self._selected_ids -= page_ids
+        self._refresh_list()
+        self._update_batch_state()
+        self.page.update()
+
+    def _on_card_check(self, paper_id: int, selected: bool):
+        if selected:
+            self._selected_ids.add(paper_id)
+        else:
+            self._selected_ids.discard(paper_id)
+        self._update_batch_state()
+        self.page.update()
+
+    def _update_batch_state(self):
+        n = len(self._selected_ids)
+        if self._batch_row is None:
+            return
+        self._batch_row.visible = n > 0
+        self._batch_count_text.value = f"已選 {n} 篇"
+        # 同步全選 checkbox 的三態
+        start = self.current_page * self.page_size
+        page_ids = {p.id for p in self.papers[start:start + self.page_size]}
+        sel_in_page = self._selected_ids & page_ids
+        if not sel_in_page:
+            self._select_all_cb.value = False
+        elif sel_in_page == page_ids:
+            self._select_all_cb.value = True
+        else:
+            self._select_all_cb.value = None   # indeterminate
+
+    def _on_batch_delete(self, e):
+        if not self._selected_ids:
+            return
+        count = len(self._selected_ids)
+
+        def confirm(ev):
+            self._close_dlg(dlg)
+            deleted = sum(
+                1 for pid in list(self._selected_ids)
+                if self.pipeline.delete_paper(pid)
+            )
+            self._selected_ids.clear()
+            self._load_papers(self.selected_tag, self._search_q)
+            self._refresh_list()
+            self._update_batch_state()
+            self._snack(f"已刪除 {deleted} 篇論文")
+            self.page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("確認批次刪除", size=15),
+            content=ft.Text(f"確定刪除選取的 {count} 篇論文？此操作無法復原。", size=13),
+            actions=[
+                ft.TextButton("取消", on_click=lambda ev: self._close_dlg(dlg)),
+                ft.TextButton("刪除", on_click=confirm,
+                              style=ft.ButtonStyle(color=RED)),
+            ],
+        )
+        self.page.overlay.append(dlg)
+        dlg.open = True
+        self.page.update()
+
+    def _on_batch_retag(self, e):
+        if not self._selected_ids:
+            return
+        count = len(self._selected_ids)
+        tags_field = ft.TextField(
+            label="新增標籤（逗號分隔，不會刪除現有標籤）",
+            hint_text="例如：Machine Learning, NLP",
+            expand=True,
+        )
+        status_t = ft.Text("", size=12)
+
+        def _do_retag(ev):
+            tags_str = (tags_field.value or "").strip()
+            if not tags_str:
+                status_t.value = "⚠️ 請輸入至少一個標籤"
+                status_t.color = RED
+                self.page.update()
+                return
+            new_tags = [t.strip() for t in tags_str.split(",") if t.strip()]
+            status_t.value = "處理中..."
+            status_t.color = ACCENT
+            self.page.update()
+
+            def run():
+                updated = 0
+                for pid in list(self._selected_ids):
+                    paper = self.pipeline.sqlite_db.get_by_id(pid)
+                    if paper:
+                        existing = list(paper.tags or [])
+                        for nt in new_tags:
+                            if nt not in existing:
+                                existing.append(nt)
+                        paper.tags = existing
+                        self.pipeline.sqlite_db.update(paper)
+                        updated += 1
+
+                self._close_dlg(dlg)
+                self._selected_ids.clear()
+                self._load_papers(self.selected_tag, self._search_q)
+                self._refresh_list()
+                self._update_batch_state()
+                self._snack(f"已為 {updated} 篇論文新增標籤：{', '.join(new_tags)}")
+                self.page.update()
+
+            threading.Thread(target=run, daemon=True).start()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"批次重標籤（{count} 篇）", size=15, weight=ft.FontWeight.W_600),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Text(f"為選取的 {count} 篇論文新增以下標籤", size=12, color=AUTH_C),
+                    tags_field,
+                    status_t,
+                ], spacing=10),
+                width=480,
+            ),
+            actions=[
+                ft.TextButton("取消", on_click=lambda ev: self._close_dlg(dlg)),
+                ft.ElevatedButton(
+                    "套用標籤", on_click=_do_retag,
+                    style=ft.ButtonStyle(bgcolor="#7C3AED", color="#FFFFFF"),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dlg
+        dlg.open = True
+        self.page.update()
 
     def _snack(self, msg: str, error: bool = False):
         self.page.snack_bar = ft.SnackBar(

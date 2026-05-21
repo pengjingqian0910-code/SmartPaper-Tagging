@@ -5,7 +5,10 @@
 """
 
 import threading
+import uuid as _uuid
 import flet as ft
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from ...services.qa_service import QAService, ChatMessage, QAResult, SourceChunk
@@ -132,6 +135,9 @@ class QAView:
         self._multi_picker: Optional[ft.FilePicker] = None
         self._single_picker: Optional[ft.FilePicker] = None
         self._new_paper_picker: Optional[ft.FilePicker] = None
+        self._export_picker: Optional[ft.FilePicker] = None
+        # 暫存待寫入的 Markdown 內容（FilePicker on_result 中寫檔）
+        self._pending_export_md: str = ""
 
     # ── 懶載入 ────────────────────────────────────────────────────────────
 
@@ -188,8 +194,11 @@ class QAView:
         self._multi_picker = ft.FilePicker()
         self._single_picker = ft.FilePicker()
         self._new_paper_picker = ft.FilePicker()
+        self._export_picker = ft.FilePicker()
+        self._export_picker.on_result = self._on_export_picker_result
         self.page.overlay.extend([
-            self._multi_picker, self._single_picker, self._new_paper_picker,
+            self._multi_picker, self._single_picker,
+            self._new_paper_picker, self._export_picker,
         ])
 
         # ── 右側：聊天區 ──────────────────────────────────────────────
@@ -738,9 +747,16 @@ class QAView:
 
     def _new_session_data(self) -> dict:
         self._session_counter += 1
+        session_uuid = str(_uuid.uuid4())
+        title = f"對話 {self._session_counter}"
+        try:
+            self._sqlite.save_chat_session(session_uuid, title)
+        except Exception:
+            pass
         return {
             "id": self._session_counter,
-            "title": f"對話 {self._session_counter}",
+            "uuid": session_uuid,
+            "title": title,
             "history": [],
             "messages": [],   # list of {type, ...} for re-rendering
             "source_paper_ids": None,
@@ -755,8 +771,14 @@ class QAView:
             icon_color="#1D4ED8", icon_size=18,
             on_click=self._on_new_session,
         )
+        export_btn = ft.IconButton(
+            icon="download",
+            tooltip="匯出目前對話為 Markdown",
+            icon_color="#059669", icon_size=18,
+            on_click=self._on_export_session,
+        )
         return ft.Row(
-            tabs + [new_btn],
+            tabs + [new_btn, export_btn],
             spacing=4, scroll=ft.ScrollMode.AUTO,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
@@ -800,7 +822,13 @@ class QAView:
             icon_color="#1D4ED8", icon_size=18,
             on_click=self._on_new_session,
         )
-        self._session_bar.controls = tabs + [new_btn]
+        export_btn = ft.IconButton(
+            icon="download",
+            tooltip="匯出目前對話為 Markdown",
+            icon_color="#059669", icon_size=18,
+            on_click=self._on_export_session,
+        )
+        self._session_bar.controls = tabs + [new_btn, export_btn]
 
     def _save_current_session(self):
         if not self._sessions:
@@ -1006,6 +1034,10 @@ class QAView:
         session["messages"].append({"type": "user", "text": question})
         if is_first_msg:
             session["title"] = question[:22] + ("…" if len(question) > 22 else "")
+            try:
+                self._sqlite.update_chat_session_title(session["uuid"], session["title"])
+            except Exception:
+                pass
             self._rebuild_session_bar()
             self._session_bar.update()
 
@@ -1069,6 +1101,23 @@ class QAView:
                 self._history.append(ChatMessage(role="user", content=question))
                 self._history.append(ChatMessage(role="assistant", content=result.answer))
                 self._last_result = result
+
+                # SQLite 持久化
+                try:
+                    sess_uuid = self._sessions[self._current_session_idx].get("uuid", "")
+                    if sess_uuid:
+                        self._sqlite.save_chat_message(sess_uuid, "user", question)
+                        sources_str = ",".join(
+                            str(sc.paper.id) for sc in (result.source_chunks or [])
+                        )
+                        self._sqlite.save_chat_message(
+                            sess_uuid, "assistant", result.answer,
+                            intent_tag=result.intent or "",
+                            is_cached=result.cache_hit,
+                            sources=sources_str,
+                        )
+                except Exception:
+                    pass
 
             except Exception as ex:
                 result = QAResult(answer=f"⚠️ 發生錯誤：{ex}", query=question)
@@ -1350,6 +1399,66 @@ class QAView:
             ft.Container(content=ft.Text(msg, size=12, color=ft.colors.RED_700),
                          bgcolor="#FFEBEE", border_radius=8, padding=12)
         )
+        self._chat_column.update()
+
+    # ── 匯出對話 Markdown ─────────────────────────────────────────────────
+
+    def _on_export_session(self, e):
+        session = self._sessions[self._current_session_idx]
+        if not any(m["type"] in ("user", "assistant") for m in session["messages"]):
+            self._append_error("目前對話是空的，無法匯出。")
+            return
+
+        lines: list[str] = [
+            f"# {session['title']}",
+            f"> 匯出時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "",
+        ]
+        for msg in session["messages"]:
+            if msg["type"] == "user":
+                lines += [f"## 你\n\n{msg['text']}\n"]
+            elif msg["type"] == "assistant":
+                result = msg["result"]
+                lines += [f"## AI 助理\n\n{result.answer}\n"]
+                chunks = result.source_chunks or []
+                if chunks:
+                    lines.append("### 引用來源\n")
+                    seen: set[int] = set()
+                    for i, sc in enumerate(chunks, 1):
+                        pid = sc.paper.id
+                        if pid in seen:
+                            continue
+                        seen.add(pid)
+                        year = f" ({sc.paper.year})" if sc.paper.year else ""
+                        lines.append(f"{i}. **{sc.paper.title}**{year}")
+                        if sc.paper.doi:
+                            lines.append(f"   doi:{sc.paper.doi}")
+                    lines.append("")
+
+        self._pending_export_md = "\n".join(lines)
+        safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in session["title"])
+        self._export_picker.save_file(
+            dialog_title="儲存對話記錄",
+            file_name=f"{safe_title}.md",
+            allowed_extensions=["md"],
+        )
+
+    def _on_export_picker_result(self, e):
+        if not e.path or not self._pending_export_md:
+            return
+        try:
+            Path(e.path).write_text(self._pending_export_md, encoding="utf-8")
+            self._chat_column.controls.append(
+                ft.Container(
+                    content=ft.Text(f"✅ 對話已匯出至：{Path(e.path).name}",
+                                    size=12, color=ft.colors.GREEN_700),
+                    bgcolor="#E8F5E9", border_radius=8, padding=10,
+                )
+            )
+        except Exception as ex:
+            self._append_error(f"❌ 匯出失敗：{ex}")
+        finally:
+            self._pending_export_md = ""
         self._chat_column.update()
 
     def _set_loading(self, loading: bool):

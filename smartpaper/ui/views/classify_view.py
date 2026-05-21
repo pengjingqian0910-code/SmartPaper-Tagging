@@ -3,6 +3,7 @@
 讓用戶輸入主題關鍵字，將論文分類到相應主題
 """
 
+import threading
 import flet as ft
 from typing import Optional
 
@@ -97,8 +98,17 @@ class ClassifyView:
             on_click=self.suggest_topics,
         )
 
-        # 進度指示器
-        self.progress_ring = ft.ProgressRing(visible=False)
+        # 進度指示器（Ring 用於不確定狀態；Bar 顯示精確進度）
+        self.progress_ring = ft.ProgressRing(visible=False, width=20, height=20)
+        self.progress_bar = ft.ProgressBar(
+            value=0,
+            visible=False,
+            color=ft.colors.BLUE_600,
+            bgcolor=ft.colors.BLUE_100,
+            height=6,
+            border_radius=3,
+        )
+        self.progress_text = ft.Text("", size=11, color=ft.colors.GREY_600, visible=False)
         self.status_text = ft.Text("", size=12, color=ft.colors.GREY_600)
 
         # 視圖切換（主題視圖 / 論文視圖）
@@ -194,6 +204,9 @@ class ClassifyView:
                     ],
                     spacing=10,
                 ),
+                # 進度條（分類執行中顯示）
+                self.progress_bar,
+                self.progress_text,
 
                 # 視圖切換列（分類完成後顯示）
                 ft.Row(
@@ -291,19 +304,23 @@ class ClassifyView:
             self.page.update()
 
     def run_classification(self, e):
-        """執行分類"""
+        """執行分類（背景執行緒，UI 保持可互動）"""
         if not self.topics:
             return
 
         method = self.method_dropdown.value
 
-        # 檢查是否需要 API Key
         if method in ("two_stage", "llm") and not GEMINI_API_KEY:
             self.status_text.value = "錯誤：此方法需要設定 Gemini API Key"
             self.page.update()
             return
 
+        # ── 初始化 UI 狀態 ─────────────────────────────────────────
         self.progress_ring.visible = True
+        self.progress_bar.value = 0
+        self.progress_bar.visible = True
+        self.progress_text.value = "準備中..."
+        self.progress_text.visible = True
         self.classify_btn.disabled = True
         self.status_text.value = "分類中，請稍候..."
         self.results_container.controls.clear()
@@ -315,47 +332,53 @@ class ClassifyView:
         self._sort_by_citation = False
         self.page.update()
 
-        try:
-            skill = get_skill(self.skill_dropdown.value or "general")
-            self.classifier = ClassificationService(skill=skill)
+        topics_snapshot = list(self.topics)
+        include_summary = self.include_summary_checkbox.value and bool(GEMINI_API_KEY)
+        skill_id = self.skill_dropdown.value or "general"
 
-            # 進度回調
-            def progress_callback(topic, current, total):
-                self.status_text.value = f"分類中 [{current}/{total}] {topic}..."
+        def _run():
+            try:
+                skill = get_skill(skill_id)
+                self.classifier = ClassificationService(skill=skill)
+
+                def progress_callback(topic, current, total):
+                    self.status_text.value = f"分類中 [{current}/{total}] {topic}..."
+                    self.progress_bar.value = current / max(total, 1)
+                    self.progress_text.value = (
+                        f"完成 {current}/{total} 個主題 · 正在處理：{topic[:28]}"
+                    )
+                    self.page.update()
+
+                report = self.classifier.get_classification_report(
+                    topics=topics_snapshot,
+                    method=method,
+                    include_summary=include_summary,
+                    progress_callback=progress_callback if method == "two_stage" else None,
+                )
+
+                self._current_report = report
+                self._current_method = method
+                self.display_results(report, method)
+                self.status_text.value = "✅ 分類完成"
+                self.progress_bar.value = 1.0
+                self.view_topic_btn.visible = True
+                self.view_paper_btn.visible = True
+                self.sort_toggle_btn.visible = True
+                self.sync_tags_btn.visible = True
+
+            except Exception as ex:
+                self.status_text.value = f"❌ 錯誤：{str(ex)}"
+                self.results_container.controls.append(
+                    ft.Text(f"發生錯誤：{str(ex)}", color=ft.colors.RED)
+                )
+            finally:
+                self.progress_ring.visible = False
+                self.progress_bar.visible = False
+                self.progress_text.visible = False
+                self.classify_btn.disabled = False
                 self.page.update()
 
-            # 執行分類
-            report = self.classifier.get_classification_report(
-                topics=self.topics,
-                method=method,
-                include_summary=self.include_summary_checkbox.value and GEMINI_API_KEY,
-                progress_callback=progress_callback if method == "two_stage" else None,
-            )
-
-            # 保存結果供視圖切換用
-            self._current_report = report
-            self._current_method = method
-
-            # 顯示主題視圖（預設）
-            self.display_results(report, method)
-            self.status_text.value = "分類完成"
-
-            # 顯示視圖切換按鈕
-            self.view_topic_btn.visible = True
-            self.view_paper_btn.visible = True
-            self.sort_toggle_btn.visible = True
-            self.sync_tags_btn.visible = True
-
-        except Exception as ex:
-            self.status_text.value = f"錯誤：{str(ex)}"
-            self.results_container.controls.append(
-                ft.Text(f"發生錯誤：{str(ex)}", color=ft.colors.RED)
-            )
-
-        finally:
-            self.progress_ring.visible = False
-            self.classify_btn.disabled = False
-            self.page.update()
+        threading.Thread(target=_run, daemon=True).start()
 
     def _switch_to_topic_view(self, e):
         """切換到主題視圖"""

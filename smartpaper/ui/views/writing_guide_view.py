@@ -269,7 +269,7 @@ class WritingGuideView:
                 content=ft.Row([
                     _step_badge(str(index), "#94A3B8"),
                     ft.Text(section, size=13, weight=ft.FontWeight.W_600, expand=True),
-                    ft.Text("找不到相關論文", size=11, color=_C_META, italic=True),
+                    ft.Text("找不到相關論文", size=11, color=_C_META),
                 ], spacing=8),
                 padding=12, border=ft.border.all(1, _C_BORDER),
                 border_radius=8, bgcolor=_C_BG,
@@ -426,7 +426,7 @@ class WritingGuideView:
             tiles.append(ft.Container(
                 content=ft.Text(
                     "未找到相關引用，建議補充文獻或調整段落描述。",
-                    size=12, color=_C_META, italic=True,
+                    size=12, color=_C_META,
                 ),
                 padding=ft.padding.symmetric(horizontal=4, vertical=6),
             ))
@@ -532,7 +532,7 @@ class WritingGuideView:
                                         f"引用此論文說明：{c.key_concept}。\n"
                                         f"範例：「{c.cite_reason}」",
                                         size=12, color="#1E3A5F",
-                                        selectable=True, italic=True,
+                                        selectable=True,
                                     ),
                                     bgcolor="#EFF6FF",
                                     border=ft.border.only(left=ft.BorderSide(3, "#3B82F6")),
@@ -665,7 +665,7 @@ class WritingGuideView:
                         ft.Container(
                             content=ft.Text(
                                 example_text, size=12, color="#1E3A5F",
-                                selectable=True, italic=True,
+                                selectable=True,
                             ),
                             bgcolor="#EFF6FF",
                             border=ft.border.only(left=ft.BorderSide(3, "#3B82F6")),
@@ -675,14 +675,14 @@ class WritingGuideView:
                         *(
                             [ft.Row([
                                 ft.Icon("place", size=12, color="#7C3AED"),
-                                ft.Text(tip_text, size=11, color="#6D28D9", italic=True),
+                                ft.Text(tip_text, size=11, color="#6D28D9"),
                             ], spacing=4)]
                             if tip_text else []
                         ),
                     ], spacing=6),
                 )
 
-            # ── 外部論文建議區（Semantic Scholar + arXiv）──────────────
+            # ── 外部論文建議區（arXiv 優先）─────────────────────────────
             external_ctrl = ft.Container()
             if gap.external_suggestions:
                 ext_rows = []
@@ -690,15 +690,34 @@ class WritingGuideView:
                     ext_title   = ext.get("title", "")
                     ext_year    = ext.get("year") or ""
                     ext_url     = ext.get("url", "")
-                    ext_abs     = ext.get("abstract", "")
+                    ext_abs     = (ext.get("abstract") or "")[:220]
                     ext_authors = ext.get("authors", [])
                     ext_source  = ext.get("source", "arXiv")
                     src_color   = "#2563EB" if ext_source == "Semantic Scholar" else "#7C3AED"
+                    src_bg      = "#EFF6FF" if ext_source == "Semantic Scholar" else "#F5F3FF"
+                    src_border  = "#BFDBFE" if ext_source == "Semantic Scholar" else "#DDD6FE"
 
                     def _make_import_handler(e_ext=ext):
                         def _import(e):
                             self._import_arxiv_paper(e_ext, e.control)
                         return _import
+
+                    add_btn = ft.OutlinedButton(
+                        "加入文獻庫",
+                        icon="add_circle_outline",
+                        on_click=_make_import_handler(),
+                        style=ft.ButtonStyle(
+                            color=src_color,
+                            side=ft.BorderSide(1, src_color),
+                            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+                        ),
+                        height=30,
+                    )
+
+                    author_str = (
+                        ", ".join(ext_authors[:2]) + (" 等" if len(ext_authors) > 2 else "")
+                        if ext_authors else ""
+                    )
 
                     ext_rows.append(ft.Container(
                         content=ft.Column([
@@ -706,41 +725,27 @@ class WritingGuideView:
                                 ft.Icon("open_in_new", size=12, color=src_color),
                                 ft.Text(
                                     ext_title,
-                                    size=12, weight=ft.FontWeight.W_500,
+                                    size=12, weight=ft.FontWeight.W_600,
                                     color=src_color, expand=True,
                                     tooltip=ext_url or ext_title,
                                 ),
                                 ft.Container(
                                     content=ft.Text(ext_source, size=9, color=src_color),
-                                    bgcolor="#EFF6FF" if ext_source == "Semantic Scholar" else "#F5F3FF",
-                                    border_radius=4,
+                                    bgcolor=src_bg, border_radius=4,
                                     padding=ft.padding.symmetric(horizontal=5, vertical=2),
                                 ),
                                 ft.Text(str(ext_year), size=10, color=_C_META),
-                            ], spacing=6),
-                            ft.Text(
-                                (", ".join(ext_authors[:2]) + (" 等" if len(ext_authors) > 2 else ""))
-                                if ext_authors else "",
-                                size=10, color=_C_META,
+                                add_btn,
+                            ], spacing=6,
+                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            *(
+                                [ft.Text(author_str, size=10, color=_C_META)]
+                                if author_str else []
                             ),
-                            ft.Text(
-                                ext_abs,
-                                size=11, color="#374151",
-                            ),
-                            ft.ElevatedButton(
-                                "加入文獻庫",
-                                icon="add_circle_outline",
-                                on_click=_make_import_handler(),
-                                style=ft.ButtonStyle(
-                                    bgcolor="#7C3AED",
-                                    color=ft.colors.WHITE,
-                                    padding=ft.padding.symmetric(horizontal=12, vertical=6),
-                                ),
-                                height=34,
-                            ),
-                        ], spacing=4),
-                        bgcolor="#EFF6FF" if ext_source == "Semantic Scholar" else "#F5F3FF",
-                        border=ft.border.all(1, "#BFDBFE" if ext_source == "Semantic Scholar" else "#DDD6FE"),
+                            ft.Text(ext_abs, size=11, color="#374151"),
+                        ], spacing=3),
+                        bgcolor=src_bg,
+                        border=ft.border.all(1, src_border),
                         border_radius=6,
                         padding=ft.padding.symmetric(horizontal=10, vertical=8),
                     ))
@@ -749,16 +754,23 @@ class WritingGuideView:
                     content=ft.Column([
                         ft.Row([
                             ft.Icon("travel_explore", size=13, color="#7C3AED"),
-                            ft.Text("外部論文建議", size=11,
+                            ft.Text("外部高相關論文", size=12,
                                     weight=ft.FontWeight.W_600, color="#5B21B6"),
                             _chip(f"{len(gap.external_suggestions)} 篇", "#7C3AED"),
+                            ft.Text("— 點擊右側按鈕可加入文獻庫",
+                                    size=10, color=_C_META),
                         ], spacing=6),
                         *ext_rows,
                     ], spacing=6),
+                    bgcolor="#FAFAFA",
+                    border=ft.border.all(1, "#DDD6FE"),
+                    border_radius=8,
+                    padding=10,
                 )
 
             gap_tiles.append(ft.Container(
                 content=ft.Column([
+                    # 概念標頭
                     ft.Row([
                         ft.Container(
                             content=ft.Text(gap.concept, size=11, color="#FFFFFF",
@@ -768,13 +780,16 @@ class WritingGuideView:
                         ),
                         ft.Container(expand=True),
                         ft.Text(f"→ {gap.suggested_section[:35]}",
-                                size=10, color=_C_META, italic=True),
+                                size=10, color=_C_META),
                     ], spacing=8),
-                    ft.Text(gap.reason, size=11, color=_C_META),
-                    paper_row,
-                    example_ctrl,
+                    ft.Text(gap.reason, size=12, color="#374151"),
+                    # 1. 外部論文優先
                     external_ctrl,
-                ], spacing=6),
+                    # 2. AI 生成寫作範例（基於外部論文）
+                    example_ctrl,
+                    # 3. 文獻庫對應（次要資訊）
+                    paper_row,
+                ], spacing=8),
                 padding=12, border=ft.border.all(1, border_c),
                 border_radius=8, bgcolor="#FFFFFF",
             ))
@@ -788,7 +803,7 @@ class WritingGuideView:
                             color="#5B21B6"),
                     _chip(f"{len(enrichment.concept_gaps)} 個", color),
                 ], spacing=8),
-                ft.Text("補充這些概念可讓大綱更全面，附有文獻庫對應論文、寫作範例，以及 Semantic Scholar / arXiv 外部推薦（可一鍵加入文獻庫）",
+                ft.Text("每個缺口依序呈現：外部高相關論文（可加入文獻庫）→ AI 根據外部文獻生成完整寫作範例 → 文獻庫現有對應論文",
                         size=11, color=_C_META),
                 *gap_tiles,
             ], spacing=10)
