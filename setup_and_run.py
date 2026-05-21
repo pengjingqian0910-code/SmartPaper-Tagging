@@ -16,7 +16,13 @@ from tkinter import ttk, messagebox
 
 PROJECT_DIR  = Path(__file__).resolve().parent
 VENV_DIR     = PROJECT_DIR / ".venv"
-VENV_PYTHON  = VENV_DIR / "Scripts" / "python.exe"
+# 跨平台 venv 路徑
+if sys.platform == "win32":
+    VENV_PYTHON = VENV_DIR / "Scripts" / "python.exe"
+    _VENV_PIP   = VENV_DIR / "Scripts" / "pip.exe"
+else:
+    VENV_PYTHON = VENV_DIR / "bin" / "python"
+    _VENV_PIP   = VENV_DIR / "bin" / "pip"
 MARKER_FILE  = PROJECT_DIR / ".setup_done"
 ENV_FILE     = PROJECT_DIR / ".env"
 REQ_FILE     = PROJECT_DIR / "requirements.txt"
@@ -243,9 +249,8 @@ class SetupWizard:
             self._ui(lambda: self._highlight_step(1))
             self._ui(lambda: self._set_status("安裝套件中（可能需要 2–5 分鐘）..."))
             self._log_q(f"\n>>> pip install -r requirements.txt")
-            pip = VENV_DIR / "Scripts" / "pip.exe"
             proc = subprocess.Popen(
-                [str(pip), "install", "-r", str(REQ_FILE),
+                [str(_VENV_PIP), "install", "-r", str(REQ_FILE),
                  "--disable-pip-version-check"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",

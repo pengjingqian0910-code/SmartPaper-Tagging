@@ -14,8 +14,10 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 PYTHON      = Path(sys.executable)
-PYTHONW     = PYTHON.parent / "pythonw.exe"
+# Windows: 用 pythonw.exe 避免出現空白命令列視窗；macOS/Linux 直接用 python
+PYTHONW     = (PYTHON.parent / "pythonw.exe") if sys.platform == "win32" else None
 ICON_ICO    = PROJECT_DIR / "assets" / "icon.ico"
+ICON_PNG    = PROJECT_DIR / "assets" / "icon.png"
 
 # 啟動畫面尺寸
 W, H = 420, 280
@@ -35,9 +37,18 @@ class SplashScreen:
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", 0.0)       # 開始透明，淡入用
         self._center()
-        if ICON_ICO.exists():
+        # Windows: iconbitmap 支援 .ico；macOS/Linux: 用 PhotoImage
+        if sys.platform == "win32" and ICON_ICO.exists():
             try:
                 self.root.iconbitmap(str(ICON_ICO))
+            except Exception:
+                pass
+        elif ICON_PNG.exists():
+            try:
+                from PIL import Image as _PILImage, ImageTk as _ImageTk
+                _pil = _PILImage.open(ICON_PNG).resize((64, 64))
+                self._icon_ref = _ImageTk.PhotoImage(_pil)
+                self.root.iconphoto(True, self._icon_ref)
             except Exception:
                 pass
 
@@ -215,7 +226,7 @@ class SplashScreen:
         self._animate()
 
         def _launch():
-            runner = str(PYTHONW) if PYTHONW.exists() else str(PYTHON)
+            runner = str(PYTHONW) if (PYTHONW and PYTHONW.exists()) else str(PYTHON)
             main_py = str(PROJECT_DIR / "main.py")
             try:
                 self.root.after(0, lambda: self.set_status("載入服務模組..."))
