@@ -14,6 +14,7 @@ from ...models import Paper
 from ...services.writing_guide import (
     WritingGuideService, SectionGuide, OutlineEnrichment,
 )
+from ...services.text_polish import TextPolishService, PolishResult
 from ...config import GEMINI_API_KEY
 
 # ── 色彩 ──────────────────────────────────────────────────────────────────
@@ -48,7 +49,40 @@ class WritingGuideView:
         self._vector_db = VectorDB()
 
     def build(self) -> ft.Control:
-        # ── 左側：輸入區 ────────────────────────────────────────────────
+        self.file_picker = ft.FilePicker()
+        self.file_picker.on_result = self.on_export_path_selected
+        self.page.overlay.append(self.file_picker)
+
+        return ft.Tabs(
+            selected_index=0,
+            animation_duration=200,
+            tabs=[
+                ft.Tab(
+                    tab_content=ft.Row([
+                        ft.Icon("edit_note", size=14),
+                        ft.Text("引用導引", size=13),
+                    ], spacing=6),
+                    content=ft.Container(
+                        content=self._build_citation_tab(),
+                        expand=True,
+                    ),
+                ),
+                ft.Tab(
+                    tab_content=ft.Row([
+                        ft.Icon("auto_fix_high", size=14),
+                        ft.Text("文稿潤色", size=13),
+                    ], spacing=6),
+                    content=ft.Container(
+                        content=self._build_polish_tab(),
+                        expand=True,
+                    ),
+                ),
+            ],
+            expand=True,
+        )
+
+    # ── Tab 0：引用導引（原有功能）────────────────────────────────────
+    def _build_citation_tab(self) -> ft.Control:
         self.outline_input = ft.TextField(
             label="寫作大綱（每行一個段落）",
             hint_text=(
@@ -78,8 +112,8 @@ class WritingGuideView:
             self.run_analyze,
             self.run_enrichment,
         ]
-        self.find_btn    = self._step_btn(1, "搜尋候選論文", "search",         self.run_find_candidates)
-        self.analyze_btn = self._step_btn(2, "AI 分析引用",  "auto_awesome",   self.run_analyze,   disabled=True)
+        self.find_btn    = self._step_btn(1, "搜尋候選論文", "search",           self.run_find_candidates)
+        self.analyze_btn = self._step_btn(2, "AI 分析引用",  "auto_awesome",     self.run_analyze,    disabled=True)
         self.enrich_btn  = self._step_btn(3, "缺口補強 + 寫作範例", "lightbulb", self.run_enrichment, disabled=True)
 
         self.export_btn = ft.TextButton(
@@ -87,10 +121,6 @@ class WritingGuideView:
             on_click=self.export_guide, visible=False,
             style=ft.ButtonStyle(color=_C_META),
         )
-
-        self.file_picker = ft.FilePicker()
-        self.file_picker.on_result = self.on_export_path_selected
-        self.page.overlay.append(self.file_picker)
 
         self.progress_ring = ft.ProgressRing(visible=False, width=18, height=18, stroke_width=2)
         self.status_text   = ft.Text("", size=12, color=_C_META)
@@ -101,17 +131,13 @@ class WritingGuideView:
 
         left_panel = ft.Container(
             content=ft.Column([
-                ft.Text("寫作引用導引", size=20, weight=ft.FontWeight.BOLD, color=_C_TITLE),
+                ft.Text("引用導引", size=18, weight=ft.FontWeight.BOLD, color=_C_TITLE),
                 ft.Text("輸入大綱，逐步取得引用建議與缺口分析", size=12, color=_C_META),
                 ft.Divider(height=8, color=_C_BORDER),
                 self.outline_input,
                 ft.Divider(height=4, color=_C_BORDER),
                 self.n_candidates_dropdown,
-                ft.Column([
-                    self.find_btn,
-                    self.analyze_btn,
-                    self.enrich_btn,
-                ], spacing=8),
+                ft.Column([self.find_btn, self.analyze_btn, self.enrich_btn], spacing=8),
                 ft.Row([self.progress_ring, self.status_text], spacing=8,
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.export_btn,
@@ -120,21 +146,16 @@ class WritingGuideView:
             padding=ft.padding.only(left=16, right=12, top=16, bottom=16),
         )
 
-        # ── 右側：結果區 ────────────────────────────────────────────────
         self.results_container = ft.Column(
-            scroll=ft.ScrollMode.AUTO,
-            expand=True,
-            spacing=12,
+            scroll=ft.ScrollMode.AUTO, expand=True, spacing=12,
         )
-
         self._results_placeholder = ft.Container(
             content=ft.Column([
                 ft.Icon("edit_document", size=48, color="#CBD5E1"),
                 ft.Text("結果將顯示在此", size=14, color="#CBD5E1"),
                 ft.Text("請先在左側輸入大綱，依序執行步驟", size=12, color="#CBD5E1"),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
-            alignment=ft.alignment.center,
-            expand=True,
+            alignment=ft.alignment.center, expand=True,
         )
         self.results_container.controls.append(self._results_placeholder)
 
@@ -146,6 +167,336 @@ class WritingGuideView:
         )
 
         return ft.Row([left_panel, right_panel], expand=True, spacing=0)
+
+    # ── Tab 1：文稿潤色 ───────────────────────────────────────────────
+    def _build_polish_tab(self) -> ft.Control:
+        self._polish_service: Optional[TextPolishService] = None
+        self._polish_result: Optional[PolishResult] = None
+
+        # ── 左側輸入 ──────────────────────────────────────────────────
+        self._polish_input = ft.TextField(
+            label="貼入草稿段落",
+            hint_text=(
+                "貼入你已寫好的段落或句子，AI 將：\n"
+                "• 改寫為學術英文語氣\n"
+                "• 逐句批注改動理由\n"
+                "• 從文獻庫推薦可插入的引用\n"
+                "• 偵測現有引用並推薦文庫中更佳的替代論文"
+            ),
+            multiline=True, min_lines=10, max_lines=25,
+            expand=True, text_size=13,
+        )
+
+        self._polish_progress = ft.ProgressRing(
+            visible=False, width=18, height=18, stroke_width=2,
+        )
+        self._polish_status = ft.Text("", size=12, color=_C_META)
+
+        polish_btn = ft.ElevatedButton(
+            "分析並潤色",
+            icon="auto_fix_high",
+            on_click=self._run_polish,
+            style=ft.ButtonStyle(bgcolor="#7C3AED", color="#FFFFFF"),
+        )
+
+        left_panel = ft.Container(
+            content=ft.Column([
+                ft.Text("文稿潤色", size=18, weight=ft.FontWeight.BOLD, color=_C_TITLE),
+                ft.Text("提升學術語氣，自動插入引用，偵測現有引用並推薦更佳替代", size=12, color=_C_META),
+                ft.Divider(height=8, color=_C_BORDER),
+                self._polish_input,
+                ft.Divider(height=4, color=_C_BORDER),
+                polish_btn,
+                ft.Row([self._polish_progress, self._polish_status], spacing=8,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ], spacing=12, expand=True),
+            width=330,
+            padding=ft.padding.only(left=16, right=12, top=16, bottom=16),
+        )
+
+        # ── 右側結果 ──────────────────────────────────────────────────
+        self._polish_results = ft.Column(
+            scroll=ft.ScrollMode.AUTO, expand=True, spacing=14,
+        )
+        self._polish_placeholder = ft.Container(
+            content=ft.Column([
+                ft.Icon("auto_fix_high", size=48, color="#CBD5E1"),
+                ft.Text("潤色結果將顯示在此", size=14, color="#CBD5E1"),
+                ft.Text("在左側貼入草稿後點擊「分析並潤色」", size=12, color="#CBD5E1"),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+            alignment=ft.alignment.center, expand=True,
+        )
+        self._polish_results.controls.append(self._polish_placeholder)
+
+        right_panel = ft.Container(
+            content=self._polish_results,
+            expand=True,
+            padding=ft.padding.only(left=8, right=16, top=16, bottom=16),
+            border=ft.border.only(left=ft.BorderSide(1, _C_BORDER)),
+        )
+
+        return ft.Row([left_panel, right_panel], expand=True, spacing=0)
+
+    # ── 執行潤色 ──────────────────────────────────────────────────────
+    def _run_polish(self, _e):
+        text = (self._polish_input.value or "").strip()
+        if not text:
+            self._polish_status.value = "請先貼入草稿文字"
+            self.page.update()
+            return
+
+        self._polish_progress.visible = True
+        self._polish_status.value = "分析中…"
+        self._polish_results.controls.clear()
+        self.page.update()
+
+        def _run():
+            try:
+                if self._polish_service is None:
+                    self._polish_service = TextPolishService(
+                        sqlite_db=self._sqlite_db,
+                        vector_db=self._vector_db,
+                    )
+
+                def prog(msg: str):
+                    self._polish_status.value = msg
+                    self.page.update()
+
+                result = self._polish_service.polish(text, progress_callback=prog)
+                self._polish_result = result
+                self._polish_results.controls.clear()
+                self._polish_results.controls.append(
+                    self._build_polish_result_card(text, result)
+                )
+            except Exception as ex:
+                self._polish_status.value = f"失敗：{ex}"
+                self._polish_results.controls.clear()
+                self._polish_results.controls.append(
+                    self._polish_placeholder
+                )
+            finally:
+                self._polish_progress.visible = False
+                self.page.update()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _build_polish_result_card(self, original: str, result: PolishResult) -> ft.Control:
+        violet = "#7C3AED"
+        violet_bg = "#F5F3FF"
+        violet_border = "#DDD6FE"
+        teal = "#0D9488"
+        teal_bg = "#F0FDFA"
+        teal_border = "#99F6E4"
+
+        # ── 1. 對照顯示（原文 vs 潤色版）────────────────────────────
+        comparison = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon("compare_arrows", size=14, color=violet),
+                    ft.Text("Before / After", size=13,
+                            weight=ft.FontWeight.W_600, color=violet),
+                ], spacing=6),
+                ft.Row([
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("Original Draft", size=11,
+                                    color=_C_META, weight=ft.FontWeight.W_600),
+                            ft.Container(
+                                content=ft.Text(original, size=12, color="#374151",
+                                                selectable=True),
+                                bgcolor="#F9FAFB",
+                                border=ft.border.only(left=ft.BorderSide(3, "#9CA3AF")),
+                                padding=ft.padding.only(left=10, top=8, bottom=8, right=8),
+                                border_radius=4,
+                            ),
+                        ], spacing=6),
+                        expand=True,
+                    ),
+                    ft.Container(width=12),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("Polished Version", size=11,
+                                    color=violet, weight=ft.FontWeight.W_600),
+                            ft.Container(
+                                content=ft.Text(result.polished_text, size=12,
+                                                color="#1E1B4B", selectable=True),
+                                bgcolor=violet_bg,
+                                border=ft.border.only(left=ft.BorderSide(3, violet)),
+                                padding=ft.padding.only(left=10, top=8, bottom=8, right=8),
+                                border_radius=4,
+                            ),
+                        ], spacing=6),
+                        expand=True,
+                    ),
+                ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START),
+            ], spacing=10),
+            padding=14,
+            border=ft.border.all(1, violet_border),
+            border_radius=12,
+            bgcolor="#FAFAFA",
+        )
+
+        # ── 2. 逐句批注 ───────────────────────────────────────────────
+        annotation_ctrl = ft.Container()
+        if result.sentence_notes:
+            note_rows = []
+            for note in result.sentence_notes:
+                note_rows.append(ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Icon("remove_circle_outline", size=11, color="#DC2626"),
+                            ft.Text(note.original, size=11, color="#7F1D1D",
+                                    selectable=True, expand=True),
+                        ], spacing=6),
+                        ft.Row([
+                            ft.Icon("add_circle_outline", size=11, color="#16A34A"),
+                            ft.Text(note.polished, size=11, color="#14532D",
+                                    selectable=True, expand=True),
+                        ], spacing=6),
+                        ft.Row([
+                            ft.Icon("info_outline", size=11, color=_C_META),
+                            ft.Text(note.comment, size=10, color=_C_META,
+                                    expand=True),
+                        ], spacing=6),
+                    ], spacing=4),
+                    padding=10,
+                    bgcolor="#FFFFFF",
+                    border=ft.border.all(1, "#E5E7EB"),
+                    border_radius=6,
+                ))
+
+            annotation_ctrl = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon("rate_review", size=14, color=violet),
+                        ft.Text("Sentence-Level Annotations", size=13,
+                                weight=ft.FontWeight.W_600, color=violet),
+                        _chip(f"{len(result.sentence_notes)} notes", violet),
+                    ], spacing=6),
+                    ft.Text("Red = original  ·  Green = improved  ·  Grey = reason",
+                            size=10, color=_C_META),
+                    *note_rows,
+                ], spacing=8),
+                padding=14,
+                border=ft.border.all(1, violet_border),
+                border_radius=12,
+                bgcolor=violet_bg,
+            )
+
+        # ── 3. 引用建議（從文庫） ─────────────────────────────────────
+        cite_ctrl = ft.Container()
+        if result.citation_suggestions:
+            cite_rows = []
+            for cs in result.citation_suggestions:
+                auth = (cs.paper.authors[0] + " et al."
+                        if (cs.paper.authors and len(cs.paper.authors) > 1)
+                        else (cs.paper.authors[0] if cs.paper.authors else "?"))
+                cite_rows.append(ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Icon("menu_book", size=12, color=teal),
+                            ft.Text(cs.paper.title, size=12,
+                                    weight=ft.FontWeight.W_600,
+                                    color="#0F766E", expand=True),
+                            ft.Text(f"({cs.paper.year or '?'})",
+                                    size=10, color=_C_META),
+                        ], spacing=6),
+                        ft.Row([
+                            ft.Text("Where:", size=10, color=_C_META,
+                                    weight=ft.FontWeight.W_600),
+                            ft.Text(cs.location_hint, size=10,
+                                    color=_C_TITLE, expand=True),
+                        ], spacing=4),
+                        ft.Row([
+                            ft.Text("Tags:", size=10, color=_C_META,
+                                    weight=ft.FontWeight.W_600),
+                            ft.Text(cs.relevance_reason, size=10,
+                                    color=_C_META, expand=True),
+                        ], spacing=4),
+                    ], spacing=4),
+                    padding=10,
+                    bgcolor="#FFFFFF",
+                    border=ft.border.all(1, teal_border),
+                    border_radius=6,
+                ))
+
+            cite_ctrl = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon("add_link", size=14, color=teal),
+                        ft.Text("Citation Suggestions from Library", size=13,
+                                weight=ft.FontWeight.W_600, color=teal),
+                        _chip(f"{len(result.citation_suggestions)} papers", teal),
+                    ], spacing=6),
+                    ft.Text("Papers in your library relevant to this text's key topics",
+                            size=10, color=_C_META),
+                    *cite_rows,
+                ], spacing=8),
+                padding=14,
+                border=ft.border.all(1, teal_border),
+                border_radius=12,
+                bgcolor=teal_bg,
+            )
+
+        # ── 4. 現有引用替代推薦 ───────────────────────────────────────
+        alt_ctrl = ft.Container()
+        if result.alternative_papers:
+            alt_rows = []
+            for alt in result.alternative_papers:
+                alt_rows.append(ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Text("You cited:", size=10, color=_C_META,
+                                    weight=ft.FontWeight.W_600),
+                            ft.Container(
+                                content=ft.Text(alt.cited_ref, size=10,
+                                                color="#92400E"),
+                                bgcolor="#FEF3C7", border_radius=4,
+                                padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                            ),
+                        ], spacing=6),
+                        ft.Row([
+                            ft.Icon("swap_horiz", size=12, color="#D97706"),
+                            ft.Text("Library alternative:", size=10,
+                                    color=_C_META, weight=ft.FontWeight.W_600),
+                            ft.Text(
+                                f"{alt.paper.title[:55]}{'…' if len(alt.paper.title) > 55 else ''} ({alt.paper.year or '?'})",
+                                size=11, color="#92400E", expand=True,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                        ], spacing=6),
+                        ft.Text(alt.reason, size=10, color=_C_META),
+                    ], spacing=4),
+                    padding=10,
+                    bgcolor="#FFFBEB",
+                    border=ft.border.all(1, "#FDE68A"),
+                    border_radius=6,
+                ))
+
+            alt_ctrl = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon("swap_horiz", size=14, color="#D97706"),
+                        ft.Text("Library Alternatives for Detected Citations", size=13,
+                                weight=ft.FontWeight.W_600, color="#92400E"),
+                        _chip(f"{len(result.alternative_papers)} found", "#D97706"),
+                    ], spacing=6),
+                    ft.Text("Citations detected in your draft — your library may have better-fit papers",
+                            size=10, color=_C_META),
+                    *alt_rows,
+                ], spacing=8),
+                padding=14,
+                border=ft.border.all(1, "#FDE68A"),
+                border_radius=12,
+                bgcolor="#FFFBEB",
+            )
+
+        return ft.Column([
+            comparison,
+            annotation_ctrl,
+            cite_ctrl,
+            alt_ctrl,
+        ], spacing=14)
 
     # ── 步驟按鈕工廠 ────────────────────────────────────────────────────
 
