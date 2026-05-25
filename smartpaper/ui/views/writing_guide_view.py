@@ -386,6 +386,9 @@ class WritingGuideView:
         tiles = []
         for c in (guide.citations or []):
             pos_bg, pos_fg = _POS_COLORS.get(c.cite_position, ("#F1F5F9", "#475569"))
+            example_body = c.writing_example or (
+                f"[{c.cite_position}] {c.key_concept} — {c.cite_reason}"
+            )
             tiles.append(ft.Container(
                 content=ft.Column([
                     ft.Row([
@@ -400,23 +403,33 @@ class WritingGuideView:
                             padding=ft.padding.symmetric(horizontal=8, vertical=3),
                         ),
                     ], spacing=8),
-                    ft.Row([
-                        ft.Text("引用時機：", size=11, color=_C_META,
-                                weight=ft.FontWeight.W_600),
-                        ft.Text(c.cite_reason, size=11, color=_C_TITLE, expand=True),
-                    ]),
-                    ft.Row([
-                        ft.Text("引用概念：", size=11, color="#0D9488",
-                                weight=ft.FontWeight.W_600),
-                        ft.Text(c.key_concept, size=11, color="#0F766E", expand=True),
-                    ]),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Icon("edit_note", size=13, color="#1D4ED8"),
+                                ft.Text("Writing Example", size=11, color="#1E40AF",
+                                        weight=ft.FontWeight.W_600),
+                            ], spacing=4),
+                            ft.Container(
+                                content=ft.Text(
+                                    example_body,
+                                    size=12, color="#1E3A5F",
+                                    selectable=True,
+                                ),
+                                bgcolor="#EFF6FF",
+                                border=ft.border.only(left=ft.BorderSide(3, "#3B82F6")),
+                                padding=ft.padding.only(left=12, top=8, bottom=8, right=10),
+                                border_radius=4,
+                            ),
+                        ], spacing=6),
+                    ),
                     *(
                         [ft.Row([
                             _chip(tag, "#64748B") for tag in (c.paper.tags or [])[:4]
                         ], spacing=4)]
                         if c.paper.tags else []
                     ),
-                ], spacing=4),
+                ], spacing=6),
                 padding=10,
                 border=ft.border.all(1, "#BFDBFE"),
                 border_radius=6, bgcolor="#FFFFFF",
@@ -504,6 +517,9 @@ class WritingGuideView:
             tiles = []
             for c in guide.citations:
                 pos_bg, pos_fg = _POS_COLORS.get(c.cite_position, ("#F1F5F9", "#475569"))
+                example_body = c.writing_example or (
+                    f"[{c.cite_position}] {c.key_concept} — {c.cite_reason}"
+                )
                 tiles.append(ft.Container(
                     content=ft.Column([
                         ft.Row([
@@ -518,19 +534,16 @@ class WritingGuideView:
                                 padding=ft.padding.symmetric(horizontal=8, vertical=3),
                             ),
                         ], spacing=8),
-                        # 寫作範例框
                         ft.Container(
                             content=ft.Column([
                                 ft.Row([
                                     ft.Icon("edit_note", size=13, color="#1D4ED8"),
-                                    ft.Text("寫作範例", size=11, color="#1E40AF",
+                                    ft.Text("Writing Example", size=11, color="#1E40AF",
                                             weight=ft.FontWeight.W_600),
                                 ], spacing=4),
                                 ft.Container(
                                     content=ft.Text(
-                                        f"在「{guide.section}」的{c.cite_position}，"
-                                        f"引用此論文說明：{c.key_concept}。\n"
-                                        f"範例：「{c.cite_reason}」",
+                                        example_body,
                                         size=12, color="#1E3A5F",
                                         selectable=True,
                                     ),

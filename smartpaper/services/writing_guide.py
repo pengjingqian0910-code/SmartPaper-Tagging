@@ -39,6 +39,7 @@ class CitationGuide:
     key_concept: str       # 應引用的核心概念或發現
     cite_position: str     # 建議引用位置：開頭 / 中間 / 結尾
     relevance_score: float = 0.0
+    writing_example: str = ""  # 實際英文寫作範例段落
 
 
 @dataclass
@@ -214,41 +215,42 @@ class WritingGuideService:
                 f"   摘要：{abstract_preview}\n\n"
             )
 
-        prompt = f"""{role_prefix}你是一位學術寫作助理，負責協助作者決定在論文各段落應引用哪些文獻。
+        prompt = f"""{role_prefix}You are an academic writing assistant helping an author decide which references to cite in each section of their paper, and how to cite them effectively.
 
-作者正在撰寫這個段落：
-【{section}】
+The author is writing this section:
+[{section}]
 
-以下是與此段落語意相關的候選論文（已按相關性排序）：
+Below are semantically relevant candidate papers (ranked by relevance):
 
 {papers_text}
 
-請仔細分析每篇論文是否適合在「{section}」這個段落中被引用。
+For each paper, determine whether it should be cited in the section [{section}].
 
-考量重點：
-1. 這篇論文的哪個概念/方法/發現可以支撐這個段落的論述？
-2. 引用這篇論文能為段落增添什麼學術依據？
-3. 引用建議放在段落的哪個位置最自然？
+Consider:
+1. Which specific concept, method, or finding from this paper supports the argument of this section?
+2. What academic grounding does citing this paper add?
+3. Where in the paragraph does this citation fit most naturally?
+4. Write a short example sentence or two (60–100 words) in academic English demonstrating exactly how to cite and use this paper in the section. The citation format should be (Author et al., Year) or (Author, Year).
 
-請以 JSON 格式回答：
+Respond in JSON. All text values must be in English:
 {{
-    "writing_hint": "針對「{section}」這個段落的整體寫作建議（60字以內，說明應涵蓋哪些要點）",
+    "writing_hint": "Overall writing advice for the section [{section}]: what key points it should cover (under 30 words)",
     "citations": [
         {{
             "paper_index": 1,
             "should_cite": true,
-            "cite_reason": "為什麼要引用：具體說明這篇論文能為段落提供什麼依據（40字以內）",
-            "key_concept": "應引用的核心概念或具體發現（25字以內）",
-            "cite_position": "段落開頭 / 中間論述 / 結尾總結（選一）"
+            "cite_reason": "Why to cite: what specific evidence or grounding this paper provides (under 20 words)",
+            "key_concept": "The core concept or finding to cite (under 10 words)",
+            "cite_position": "paragraph opening / middle argument / closing summary (choose one)",
+            "writing_example": "A 60–100 word academic English paragraph demonstrating how to cite and use this paper in the section. Use (Author et al., Year) format. Show the paper's concept naturally integrated into an argument."
         }}
     ]
 }}
 
-重要：
-- 只列出 should_cite 為 true 的論文
-- 若論文與這個段落無關，直接省略，不要列入 citations
-- 每篇論文的分析必須具體，不能泛泛而談
-- 只回傳 JSON，不要有其他文字"""
+Important:
+- Only include papers where should_cite is true; omit irrelevant ones entirely.
+- Every writing_example must be concrete academic prose, not a template or description.
+- Return only the JSON, no other text."""
 
         try:
             response = self.client.models.generate_content(
@@ -281,8 +283,9 @@ class WritingGuideService:
                     should_cite=True,
                     cite_reason=item.get("cite_reason", ""),
                     key_concept=item.get("key_concept", ""),
-                    cite_position=item.get("cite_position", "中間論述"),
+                    cite_position=item.get("cite_position", "middle argument"),
                     relevance_score=candidate.get("rerank_score", candidate.get("score", 0.0)),
+                    writing_example=item.get("writing_example", ""),
                 ))
 
             return SectionGuide(
