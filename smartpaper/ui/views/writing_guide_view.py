@@ -14,7 +14,7 @@ from ...models import Paper
 from ...services.writing_guide import (
     WritingGuideService, SectionGuide, OutlineEnrichment,
 )
-from ...services.text_polish import TextPolishService, PolishResult
+from ...services.text_polish import TextPolishService, PolishResult, EvaluationResult
 from ...config import GEMINI_API_KEY
 
 # ── 色彩 ──────────────────────────────────────────────────────────────────
@@ -192,10 +192,18 @@ class WritingGuideView:
         )
         self._polish_status = ft.Text("", size=12, color=_C_META)
 
-        polish_btn = ft.ElevatedButton(
-            "分析並潤色",
+        self._eval_btn = ft.ElevatedButton(
+            "評估草稿",
+            icon="assessment",
+            on_click=self._run_evaluate,
+            style=ft.ButtonStyle(bgcolor="#6366F1", color="#FFFFFF"),
+        )
+        # 「確認，開始潤色」按鈕只在評估完成後顯示
+        self._confirm_polish_btn = ft.ElevatedButton(
+            "確認，開始潤色",
             icon="auto_fix_high",
             on_click=self._run_polish,
+            visible=False,
             style=ft.ButtonStyle(bgcolor="#7C3AED", color="#FFFFFF"),
         )
 
@@ -206,7 +214,8 @@ class WritingGuideView:
                 ft.Divider(height=8, color=_C_BORDER),
                 self._polish_input,
                 ft.Divider(height=4, color=_C_BORDER),
-                polish_btn,
+                self._eval_btn,
+                self._confirm_polish_btn,
                 ft.Row([self._polish_progress, self._polish_status], spacing=8,
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ], spacing=12, expand=True),
@@ -237,6 +246,123 @@ class WritingGuideView:
 
         return ft.Row([left_panel, right_panel], expand=True, spacing=0)
 
+    # ── 執行評估 ──────────────────────────────────────────────────────
+    def _run_evaluate(self, _e):
+        text = (self._polish_input.value or "").strip()
+        if not text:
+            self._polish_status.value = "請先貼入草稿文字"
+            self.page.update()
+            return
+
+        self._polish_progress.visible = True
+        self._polish_status.value = "AI 評估草稿中…"
+        self._confirm_polish_btn.visible = False
+        self._polish_results.controls.clear()
+        self.page.update()
+
+        def _run():
+            try:
+                if self._polish_service is None:
+                    self._polish_service = TextPolishService(
+                        sqlite_db=self._sqlite_db,
+                        vector_db=self._vector_db,
+                    )
+                result = self._polish_service.evaluate(text)
+                self._polish_results.controls.clear()
+                self._polish_results.controls.append(
+                    self._build_evaluation_card(result)
+                )
+                self._confirm_polish_btn.visible = True
+                self._polish_status.value = "評估完成，確認後可開始潤色"
+            except Exception as ex:
+                self._polish_status.value = f"評估失敗：{ex}"
+            finally:
+                self._polish_progress.visible = False
+                self.page.update()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _build_evaluation_card(self, ev: EvaluationResult) -> ft.Control:
+        def _score_bar(label: str, score: int, color: str) -> ft.Control:
+            filled = max(0, min(10, score))
+            bar_color = (
+                "#16A34A" if filled >= 7 else
+                "#D97706" if filled >= 4 else
+                "#DC2626"
+            )
+            return ft.Row([
+                ft.Text(label, size=11, color=_C_META, width=110),
+                ft.Row(
+                    [
+                        ft.Container(
+                            width=18, height=10,
+                            bgcolor=bar_color if i < filled else "#E5E7EB",
+                            border_radius=2,
+                        )
+                        for i in range(10)
+                    ],
+                    spacing=2,
+                ),
+                ft.Text(f"{filled}/10", size=11, color=bar_color,
+                        weight=ft.FontWeight.W_600),
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        def _list_section(icon: str, title: str, items: list[str],
+                          icon_color: str, bg: str, border: str) -> ft.Control:
+            if not items:
+                return ft.Container()
+            rows = [
+                ft.Row([
+                    ft.Icon(icon, size=12, color=icon_color),
+                    ft.Text(item, size=11, color=_C_TITLE, expand=True),
+                ], spacing=6)
+                for item in items
+            ]
+            return ft.Container(
+                content=ft.Column([
+                    ft.Text(title, size=11, weight=ft.FontWeight.W_600,
+                            color=icon_color),
+                    *rows,
+                ], spacing=5),
+                bgcolor=bg,
+                border=ft.border.all(1, border),
+                border_radius=8,
+                padding=10,
+            )
+
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon("assessment", size=15, color="#6366F1"),
+                    ft.Text("Draft Evaluation Report", size=13,
+                            weight=ft.FontWeight.W_600, color="#4338CA"),
+                ], spacing=6),
+                ft.Text(ev.overall_summary, size=12, color=_C_TITLE),
+                ft.Divider(height=4, color="#C7D2FE"),
+                _score_bar("Academic Tone",    ev.academic_score,  "#6366F1"),
+                _score_bar("Clarity",          ev.clarity_score,   "#6366F1"),
+                _score_bar("Citation Adequacy", ev.citation_score, "#6366F1"),
+                ft.Divider(height=4, color="#C7D2FE"),
+                _list_section(
+                    "check_circle", "Strengths", ev.strengths,
+                    "#16A34A", "#F0FDF4", "#BBF7D0",
+                ),
+                _list_section(
+                    "warning_amber", "Issues Found", ev.issues,
+                    "#DC2626", "#FEF2F2", "#FECACA",
+                ),
+                _list_section(
+                    "auto_fix_high", "What Polish Will Improve",
+                    ev.expected_improvements,
+                    "#7C3AED", "#F5F3FF", "#DDD6FE",
+                ),
+            ], spacing=10),
+            padding=16,
+            border=ft.border.all(2, "#C7D2FE"),
+            border_radius=12,
+            bgcolor="#EEF2FF",
+        )
+
     # ── 執行潤色 ──────────────────────────────────────────────────────
     def _run_polish(self, _e):
         text = (self._polish_input.value or "").strip()
@@ -246,7 +372,8 @@ class WritingGuideView:
             return
 
         self._polish_progress.visible = True
-        self._polish_status.value = "分析中…"
+        self._polish_status.value = "潤色中…"
+        self._confirm_polish_btn.visible = False
         self._polish_results.controls.clear()
         self.page.update()
 

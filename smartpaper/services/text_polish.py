@@ -38,6 +38,17 @@ class AlternativePaper:
 
 
 @dataclass
+class EvaluationResult:
+    academic_score: int        # 1–10
+    clarity_score: int         # 1–10
+    citation_score: int        # 1–10 (0 if no citations present)
+    overall_summary: str       # 1–2 sentence overall assessment
+    strengths: list[str]       # what is already good
+    issues: list[str]          # specific problems found
+    expected_improvements: list[str]  # what polish will fix
+
+
+@dataclass
 class PolishResult:
     polished_text: str
     sentence_notes: list[SentenceNote] = field(default_factory=list)
@@ -62,6 +73,80 @@ class TextPolishService:
             self.client = genai.Client(api_key=self.api_key)
         else:
             self.client = None
+
+    def evaluate(self, text: str) -> EvaluationResult:
+        """
+        Quick diagnostic of the draft before full polish.
+        Returns scores, strengths, issues, and expected improvements.
+        """
+        if not self.client:
+            return EvaluationResult(
+                academic_score=0, clarity_score=0, citation_score=0,
+                overall_summary="Gemini API Key not configured.",
+                strengths=[], issues=[], expected_improvements=[],
+            )
+
+        prompt = f"""You are an expert academic writing evaluator. Assess the following draft text and provide a concise diagnostic report.
+
+Draft text:
+\"\"\"
+{text}
+\"\"\"
+
+Evaluate on three dimensions (score 1–10, where 10 is publication-ready):
+- **Academic tone** (1–10): formality, precision of vocabulary, avoidance of colloquialisms
+- **Clarity** (1–10): logical flow, sentence structure, argument coherence
+- **Citation adequacy** (1–10): presence and appropriateness of citations (score 5 if none present, 1 if clearly needed but absent, 10 if well-cited)
+
+Respond strictly in JSON. All text values must be in English:
+{{
+    "academic_score": 7,
+    "clarity_score": 6,
+    "citation_score": 4,
+    "overall_summary": "One or two sentences summarising the draft's current academic quality and main gap.",
+    "strengths": [
+        "Specific thing that is already done well (under 15 words)",
+        "..."
+    ],
+    "issues": [
+        "Specific problem found, with an example if possible (under 20 words)",
+        "..."
+    ],
+    "expected_improvements": [
+        "Concrete improvement the polish step will make (under 15 words)",
+        "..."
+    ]
+}}
+
+Rules:
+- strengths: 1–3 items; be specific, not generic
+- issues: 2–4 items; name the exact problem (e.g. "Sentence 2 uses informal phrasing 'a lot of'")
+- expected_improvements: 2–4 items matching the issues
+- Return only the JSON, no other text"""
+
+        try:
+            resp = self.client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            raw = resp.text.strip()
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0]
+            elif "```" in raw:
+                raw = raw.split("```")[1].split("```")[0]
+            data = json.loads(raw.strip())
+            return EvaluationResult(
+                academic_score=int(data.get("academic_score", 5)),
+                clarity_score=int(data.get("clarity_score", 5)),
+                citation_score=int(data.get("citation_score", 5)),
+                overall_summary=data.get("overall_summary", ""),
+                strengths=data.get("strengths", []),
+                issues=data.get("issues", []),
+                expected_improvements=data.get("expected_improvements", []),
+            )
+        except Exception as ex:
+            return EvaluationResult(
+                academic_score=0, clarity_score=0, citation_score=0,
+                overall_summary=f"Evaluation failed: {ex}",
+                strengths=[], issues=[], expected_improvements=[],
+            )
 
     def polish(
         self,
