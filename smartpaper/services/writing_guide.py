@@ -47,6 +47,7 @@ class SectionGuide:
     section: str                          # 段落標題/描述
     citations: list[CitationGuide] = field(default_factory=list)
     writing_hint: str = ""                # 整體寫作建議
+    synthesis_paragraph: str = ""         # 所有引用論文整合成的綜述段落
 
 
 @dataclass
@@ -235,6 +236,7 @@ Consider:
 Respond in JSON. All text values must be in English:
 {{
     "writing_hint": "Overall writing advice for the section [{section}]: what key points it should cover (under 30 words)",
+    "synthesis_paragraph": "A single cohesive academic paragraph (100–160 words) that weaves ALL the cited papers together into a unified argument for the section [{section}]. Each paper should appear at least once. Show how they collectively build the scholarly case — not as a list, but as flowing prose with natural transitions between ideas. Use (Author et al., Year) citation format.",
     "citations": [
         {{
             "paper_index": 1,
@@ -249,6 +251,7 @@ Respond in JSON. All text values must be in English:
 
 Important:
 - Only include papers where should_cite is true; omit irrelevant ones entirely.
+- synthesis_paragraph must integrate ALL cited papers, not just one.
 - Every writing_example must be concrete academic prose, not a template or description.
 - Return only the JSON, no other text."""
 
@@ -267,6 +270,7 @@ Important:
 
             data = json.loads(response_text.strip())
             writing_hint = data.get("writing_hint", "")
+            synthesis_paragraph = data.get("synthesis_paragraph", "")
 
             # 解析引用建議
             citations = []
@@ -292,6 +296,7 @@ Important:
                 section=section,
                 citations=citations,
                 writing_hint=writing_hint,
+                synthesis_paragraph=synthesis_paragraph,
             )
 
         except Exception as e:

@@ -503,93 +503,77 @@ class WritingGuideView:
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _build_section_writing_examples(
+    def _build_synthesis_section(
         self, guides: list[SectionGuide],
     ) -> ft.Control:
-        """Step 2 所有引用論文的寫作範例（放在 Step 3 最前面）"""
+        """Step 3 頂部：每個段落的綜述段落（整合所有引用論文，非重複個別範例）"""
         color, bg, border_c = _STEP_COLORS[1]  # teal
-        section_cards = []
+        cards = []
 
         for idx, guide in enumerate(guides, 1):
-            if not guide.citations:
+            if not guide.citations or not guide.synthesis_paragraph:
                 continue
 
-            tiles = []
-            for c in guide.citations:
-                pos_bg, pos_fg = _POS_COLORS.get(c.cite_position, ("#F1F5F9", "#475569"))
-                example_body = c.writing_example or (
-                    f"[{c.cite_position}] {c.key_concept} — {c.cite_reason}"
-                )
-                tiles.append(ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Icon("article", size=13, color="#2563EB"),
-                            ft.Text(
-                                c.paper.title,
-                                size=12, weight=ft.FontWeight.W_600, expand=True,
-                            ),
-                            ft.Container(
-                                content=ft.Text(c.cite_position, size=10, color=pos_fg),
-                                bgcolor=pos_bg, border_radius=10,
-                                padding=ft.padding.symmetric(horizontal=8, vertical=3),
-                            ),
-                        ], spacing=8),
-                        ft.Container(
-                            content=ft.Column([
-                                ft.Row([
-                                    ft.Icon("edit_note", size=13, color="#1D4ED8"),
-                                    ft.Text("Writing Example", size=11, color="#1E40AF",
-                                            weight=ft.FontWeight.W_600),
-                                ], spacing=4),
-                                ft.Container(
-                                    content=ft.Text(
-                                        example_body,
-                                        size=12, color="#1E3A5F",
-                                        selectable=True,
-                                    ),
-                                    bgcolor="#EFF6FF",
-                                    border=ft.border.only(left=ft.BorderSide(3, "#3B82F6")),
-                                    padding=ft.padding.only(
-                                        left=12, top=8, bottom=8, right=10),
-                                    border_radius=4,
-                                ),
-                            ], spacing=6),
-                        ),
-                    ], spacing=6),
-                    padding=10,
-                    border=ft.border.all(1, "#BFDBFE"),
-                    border_radius=6, bgcolor="#FFFFFF",
-                ))
+            paper_chips = ft.Row([
+                _chip(
+                    c.paper.title[:28] + ("…" if len(c.paper.title) > 28 else ""),
+                    "#0D9488",
+                ) for c in guide.citations
+            ], spacing=4, wrap=True)
 
-            if tiles:
-                section_cards.append(ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            _step_badge(str(idx), color),
-                            ft.Text(guide.section, size=13,
-                                    weight=ft.FontWeight.W_600,
-                                    color=_C_TITLE, expand=True),
-                            _chip(f"{len(guide.citations)} 篇", color),
-                        ], spacing=8),
-                        *tiles,
+            cards.append(ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        _step_badge(str(idx), color),
+                        ft.Text(guide.section, size=13,
+                                weight=ft.FontWeight.W_600,
+                                color=_C_TITLE, expand=True),
+                        _chip(f"{len(guide.citations)} papers", color),
                     ], spacing=8),
-                    padding=12, border=ft.border.all(1, border_c),
-                    border_radius=10, bgcolor=bg,
-                ))
+                    paper_chips,
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Icon("auto_stories", size=13, color="#0F766E"),
+                                ft.Text("Synthesized Paragraph", size=11,
+                                        color="#0F766E",
+                                        weight=ft.FontWeight.W_600),
+                            ], spacing=4),
+                            ft.Container(
+                                content=ft.Text(
+                                    guide.synthesis_paragraph,
+                                    size=12, color="#134E4A",
+                                    selectable=True,
+                                ),
+                                bgcolor="#F0FDFA",
+                                border=ft.border.only(
+                                    left=ft.BorderSide(3, "#0D9488")),
+                                padding=ft.padding.only(
+                                    left=12, top=8, bottom=8, right=10),
+                                border_radius=4,
+                            ),
+                        ], spacing=6),
+                    ),
+                ], spacing=8),
+                padding=12,
+                border=ft.border.all(1, border_c),
+                border_radius=10,
+                bgcolor=bg,
+            ))
 
-        if not section_cards:
+        if not cards:
             return ft.Container()
 
         return ft.Container(
             content=ft.Column([
                 ft.Row([
-                    ft.Icon("menu_book", color=color, size=15),
-                    ft.Text("Step 2 引用論文寫作範例",
+                    ft.Icon("auto_stories", color=color, size=15),
+                    ft.Text("Synthesized Literature Review",
                             size=13, weight=ft.FontWeight.W_600, color="#0D9488"),
-                    ft.Text("—  根據步驟 2 分析的引用論文，整理具體寫作建議",
+                    ft.Text("— all cited papers woven into cohesive paragraphs",
                             size=11, color=_C_META),
                 ], spacing=6),
-                *section_cards,
+                *cards,
             ], spacing=10),
             padding=14,
             border=ft.border.all(2, border_c),
@@ -789,12 +773,12 @@ class WritingGuideView:
                 *gap_tiles,
             ], spacing=10)
 
-        examples_section = self._build_section_writing_examples(guides)
+        synthesis_section = self._build_synthesis_section(guides)
 
         return ft.Column([
-            # ── Step 2 論文寫作範例（最前面）
-            examples_section,
-            # ── 缺口補強分析（原有）
+            # ── 綜述段落（整合 Step 2 所有引用，取代重複的個別範例）
+            synthesis_section,
+            # ── 缺口補強分析
             ft.Container(
                 content=ft.Column([
                     ft.Row([
