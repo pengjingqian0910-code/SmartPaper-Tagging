@@ -56,7 +56,13 @@ Step 2 — 確認後開始潤色
 
 ## 快速開始
 
-### 🪟 Windows
+> 兩種安裝路線，依使用情境選擇其一。
+
+### 路線 A — 開發者 / 已有 Python（建議）
+
+適合：研究者自用、有 Python 環境的使用者。
+
+#### 🪟 Windows
 
 **第一次使用：**
 
@@ -78,7 +84,7 @@ python main.py ui          # 直接啟動（需已安裝依賴）
 
 ---
 
-### 🍎 macOS
+#### 🍎 macOS
 
 **環境需求（macOS）：**
 
@@ -103,6 +109,33 @@ bash launch.sh
 ```bash
 bash launch.sh
 ```
+
+---
+
+### 路線 B — 獨立執行檔（不需安裝 Python）
+
+適合：分發給不熟悉 Python 的實驗室成員或使用者。
+
+> ⚠ 打包產物約 1–3 GB，建議用 Google Drive / OneDrive 分享，不適合 email。
+
+**打包（由開發者執行一次）：**
+
+1. 先完成路線 A，確認 `.venv` 已建立
+2. 雙擊 `build_windows.bat`（約 5–10 分鐘）
+3. 產出 `dist\SmartPaper\` 資料夾，壓縮後分享給使用者
+
+**使用者收到 ZIP 後：**
+
+```
+1. 解壓 dist\SmartPaper\ 資料夾到任意位置
+2. 在資料夾內建立 .env 檔案（可複製 .env.example），填入：
+       GEMINI_API_KEY=你的金鑰
+3. 雙擊 SmartPaper.exe
+   → 第一次啟動會自動下載 ML 模型（約 500 MB，需要網路）
+   → 之後每次雙擊直接開啟
+```
+
+取得免費 Gemini API Key：[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
 
 ---
 
