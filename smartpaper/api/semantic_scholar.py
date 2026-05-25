@@ -8,25 +8,35 @@ import time
 import requests
 from typing import Optional
 
+from ._retry import make_session, rate_limited_get
+
 BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
 REC_URL  = "https://api.semanticscholar.org/recommendations/v1/papers/forpaper"
 FIELDS       = "title,externalIds,year,authors,abstract"
 DETAIL_FIELDS = "title,externalIds,year,authors,abstract,venue,citationCount"
-REQUEST_DELAY = 0.5   # 秒，避免觸發 rate limit（100 req/5s）
+REQUEST_DELAY = 0.5   # seconds between calls to respect rate limit (100 req/5s)
+
+_SESSION: Optional[requests.Session] = None
+
+
+def _get_session() -> requests.Session:
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = make_session("SmartPaper/1.0 (Semantic Scholar client)")
+    return _SESSION
 
 
 def _get(url: str, params: dict) -> Optional[dict]:
-    try:
-        resp = requests.get(url, params=params, timeout=15)
-        if resp.status_code == 429:
-            time.sleep(5)
-            resp = requests.get(url, params=params, timeout=15)
-        if resp.status_code == 200:
-            return resp.json()
+    resp = rate_limited_get(
+        _get_session(), url, params,
+        timeout=15, max_429_retries=4, service_name="SemanticScholar",
+    )
+    if resp is None:
         return None
-    except Exception as e:
-        print(f"Semantic Scholar API 失敗: {e}")
-        return None
+    if resp.status_code == 200:
+        return resp.json()
+    print(f"[SemanticScholar] HTTP {resp.status_code} for {url}")
+    return None
 
 
 def _parse_ref_entry(entry: dict, key: str) -> Optional[dict]:

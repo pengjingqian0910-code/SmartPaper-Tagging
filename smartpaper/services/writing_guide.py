@@ -10,6 +10,7 @@ from google import genai
 
 from ..api.arxiv import ArxivAPI
 from ..api import semantic_scholar as ss_api
+from ..api._retry import gemini_call_with_retry
 from ..database.sqlite_db import SQLiteDB
 from ..database.vector_db import VectorDB
 from ..config import GEMINI_API_KEY, GEMINI_MODEL
@@ -256,9 +257,11 @@ Important:
 - Return only the JSON, no other text."""
 
         try:
-            response = self.client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
+            response = gemini_call_with_retry(
+                lambda: self.client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                )
             )
             response_text = response.text.strip()
 
@@ -378,8 +381,10 @@ Respond in JSON format. All text values must be written in English:
 Return only the JSON, no other text."""
 
         try:
-            resp1 = self.client.models.generate_content(
-                model=GEMINI_MODEL, contents=prompt1,
+            resp1 = gemini_call_with_retry(
+                lambda: self.client.models.generate_content(
+                    model=GEMINI_MODEL, contents=prompt1,
+                )
             )
             text1 = resp1.text.strip()
             if "```json" in text1:
@@ -509,8 +514,10 @@ Respond in JSON format:
 Return only the JSON, no other text."""
 
         try:
-            resp2 = self.client.models.generate_content(
-                model=GEMINI_MODEL, contents=prompt2,
+            resp2 = gemini_call_with_retry(
+                lambda: self.client.models.generate_content(
+                    model=GEMINI_MODEL, contents=prompt2,
+                )
             )
             text2 = resp2.text.strip()
             if "```json" in text2:

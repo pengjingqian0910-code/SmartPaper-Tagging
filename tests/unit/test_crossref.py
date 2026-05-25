@@ -66,7 +66,8 @@ class TestCrossrefSearchByTitle:
 
     def test_network_error_returns_none(self):
         import requests
-        with patch.object(self.api.session, "get", side_effect=requests.RequestException("Connection refused")):
+        with patch("smartpaper.api._retry.time.sleep"), \
+             patch.object(self.api.session, "get", side_effect=requests.RequestException("Connection refused")):
             result = self.api.search_by_title("Any Paper")
         assert result is None
 
@@ -106,7 +107,8 @@ class TestCrossrefGetByDoi:
 
     def test_doi_lookup_failure_returns_none(self):
         import requests
-        with patch.object(self.api.session, "get", side_effect=requests.RequestException("Not found")):
+        with patch("smartpaper.api._retry.time.sleep"), \
+             patch.object(self.api.session, "get", side_effect=requests.RequestException("Not found")):
             result = self.api.get_by_doi("10.0000/invalid")
         assert result is None
 

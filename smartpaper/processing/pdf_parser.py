@@ -152,6 +152,8 @@ class ParseResult:
     sections_found: list[str] = field(default_factory=list)
     table_count: int = 0
     error: Optional[str] = None
+    quality_warning: Optional[str] = None  # non-fatal warning shown in UI
+    char_count: int = 0                    # total extracted characters
 
 
 # ── Section header 偵測 ─────────────────────────────────────────────────
@@ -548,6 +550,9 @@ def parse_pdf(file_path: str | Path) -> ParseResult:
         try:
             result = _parse_with_pymupdf4llm(file_path)
             if not result.error and result.chunks:
+                all_text = " ".join(c.text for c in result.chunks)
+                result.char_count = len(all_text)
+                _, result.quality_warning = _assess_text_quality(all_text)
                 return result
         except Exception as e:
             print(f"[pdf_parser] pymupdf4llm 失敗，改用 pdfplumber：{e}")
@@ -690,7 +695,43 @@ def parse_pdf(file_path: str | Path) -> ParseResult:
             sections_seen.add(base_section)
             result.sections_found.append(base_section)
 
+    all_text = " ".join(c.text for c in result.chunks)
+    result.char_count = len(all_text)
+    _, result.quality_warning = _assess_text_quality(all_text)
     return result
+
+
+def _assess_text_quality(text: str) -> tuple[float, Optional[str]]:
+    """
+    Assess the quality of extracted text.
+    Returns (score 0–1, warning_message or None).
+    score < 0.35 → garbled / scanned PDF likely.
+    """
+    if not text or len(text) < 50:
+        return 0.0, None
+
+    total = len(text)
+    letter_count = sum(1 for c in text if c.isalpha())
+    control_count = sum(1 for c in text if ord(c) < 32 and c not in "\n\t\r")
+    replacement_count = text.count("�")  # UTF-8 replacement char
+
+    score = letter_count / total
+    noise_ratio = (control_count + replacement_count) / total
+
+    if noise_ratio > 0.05 or score < 0.35:
+        return score, (
+            f"⚠ Extracted text quality is low (letter ratio {score:.0%}, "
+            f"noise ratio {noise_ratio:.0%}). "
+            "This PDF may be scanned (image-only) or use non-standard fonts. "
+            "For best results, apply OCR first (e.g. Adobe Acrobat, tesseract) "
+            "and re-upload the processed PDF."
+        )
+    if score < 0.50:
+        return score, (
+            f"⚠ Text extraction may be incomplete (letter ratio {score:.0%}). "
+            "Complex layout or mixed content detected — search accuracy may be reduced."
+        )
+    return score, None
 
 
 def _should_skip(section_name: str) -> bool:

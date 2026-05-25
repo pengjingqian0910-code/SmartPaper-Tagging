@@ -11,6 +11,7 @@ from google import genai
 from .. import config as _cfg
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_TAG_CATEGORIES
 from ..models import TaggingResult
+from ._retry import gemini_call_with_retry
 
 if TYPE_CHECKING:
     from ..skills import SkillConfig
@@ -92,15 +93,13 @@ class GeminiTagger:
 請只回傳 JSON，不要有其他文字。"""
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
+            response = gemini_call_with_retry(
+                lambda: self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                )
             )
-            response_text = response.text.strip()
-
-            # 嘗試解析 JSON
-            tags = self._parse_tags_response(response_text)
-
+            tags = self._parse_tags_response(response.text.strip())
             return TaggingResult(tags=tags[:num_tags])
 
         except Exception as e:

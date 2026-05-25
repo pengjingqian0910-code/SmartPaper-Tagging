@@ -14,6 +14,7 @@ from ..database.sqlite_db import SQLiteDB
 from ..database.vector_db import VectorDB
 from ..models import Paper
 from .reranker import Reranker
+from ..api._retry import gemini_call_with_retry
 
 
 @dataclass
@@ -125,7 +126,9 @@ Rules:
 - Return only the JSON, no other text"""
 
         try:
-            resp = self.client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            resp = gemini_call_with_retry(
+                lambda: self.client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            )
             raw = resp.text.strip()
             if "```json" in raw:
                 raw = raw.split("```json")[1].split("```")[0]
@@ -194,7 +197,9 @@ Rules:
 - Return only the JSON, no other text"""
 
         try:
-            resp = self.client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            resp = gemini_call_with_retry(
+                lambda: self.client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            )
             raw = resp.text.strip()
             if "```json" in raw:
                 raw = raw.split("```json")[1].split("```")[0]

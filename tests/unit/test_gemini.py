@@ -79,11 +79,31 @@ class TestGenerateTags:
     def test_api_error_returns_empty_tags(self):
         from smartpaper.models import TaggingResult
         client = MagicMock()
-        client.models.generate_content.side_effect = Exception("API quota exceeded")
+        # Non-transient error → no retry, raises immediately
+        client.models.generate_content.side_effect = Exception("Some programming error")
         tagger = _make_tagger(client)
         result = tagger.generate_tags(abstract="Some abstract.")
         assert isinstance(result, TaggingResult)
         assert result.tags == []
+
+    def test_transient_api_error_retries(self):
+        from smartpaper.models import TaggingResult
+        from unittest.mock import call
+        resp = MagicMock()
+        resp.text = '["NLP"]'
+        client = MagicMock()
+        # Fail twice with quota error then succeed
+        client.models.generate_content.side_effect = [
+            Exception("resource_exhausted"),
+            Exception("resource_exhausted"),
+            resp,
+        ]
+        tagger = _make_tagger(client)
+        with patch("smartpaper.api._retry.time.sleep"):
+            result = tagger.generate_tags(abstract="Some abstract.")
+        assert isinstance(result, TaggingResult)
+        assert result.tags == ["NLP"]
+        assert client.models.generate_content.call_count == 3
 
     def test_empty_abstract_does_not_crash(self):
         from smartpaper.models import TaggingResult

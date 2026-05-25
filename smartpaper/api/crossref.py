@@ -10,30 +10,20 @@ import requests
 from ..config import CROSSREF_API_URL, CROSSREF_EMAIL
 from ..models import CrossrefResponse
 from ..processing.cleaner import clean_html
+from ._retry import make_session, rate_limited_get
 
 
 class CrossrefAPI:
     """Crossref API 查詢類"""
 
     def __init__(self, email: Optional[str] = None):
-        """
-        初始化 Crossref API
-
-        Args:
-            email: 聯絡郵箱 (提供後可提升 API 速率限制)
-        """
         self.base_url = CROSSREF_API_URL
         self.email = email or CROSSREF_EMAIL
-        self.session = requests.Session()
 
-        # 設定 User-Agent (Crossref 要求)
-        headers = {
-            "User-Agent": "SmartPaper-Tagging/0.1.0 (Academic Paper Management Tool)"
-        }
+        ua = "SmartPaper-Tagging/0.1.0 (Academic Paper Management Tool)"
         if self.email:
-            headers["User-Agent"] += f" (mailto:{self.email})"
-
-        self.session.headers.update(headers)
+            ua += f" (mailto:{self.email})"
+        self.session = make_session(user_agent=ua)
 
     def search_by_title(
         self,
@@ -59,11 +49,12 @@ class CrossrefAPI:
         }
 
         try:
-            response = self.session.get(
-                self.base_url,
-                params=params,
-                timeout=timeout,
+            response = rate_limited_get(
+                self.session, self.base_url, params,
+                timeout=timeout, service_name="Crossref",
             )
+            if response is None:
+                return None
             response.raise_for_status()
 
             data = response.json()
@@ -165,7 +156,12 @@ class CrossrefAPI:
         url = f"{self.base_url}/{doi}"
 
         try:
-            response = self.session.get(url, timeout=timeout)
+            response = rate_limited_get(
+                self.session, url, {},
+                timeout=timeout, service_name="Crossref",
+            )
+            if response is None:
+                return None
             response.raise_for_status()
 
             data = response.json()
