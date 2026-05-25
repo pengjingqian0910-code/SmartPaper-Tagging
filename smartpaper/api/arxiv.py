@@ -92,7 +92,7 @@ class ArxivAPI:
         self,
         query: str,
         n_results: int = 5,
-        timeout: int = 15,
+        timeout: int = 30,
     ) -> list[dict]:
         """
         以關鍵字搜尋 arXiv（標題 OR 摘要）。
@@ -100,16 +100,45 @@ class ArxivAPI:
         Returns:
             list of {title, abstract, arxiv_id, year, url, authors}
         """
+        # 清理 query：移除 boolean 運算子與特殊字元，只保留有意義的詞
+        clean = re.sub(r'\b(OR|AND|ANDNOT|NOT)\b', ' ', query, flags=re.IGNORECASE)
+        clean = re.sub(r'[^\w\s]', ' ', clean)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        # 取前 5 個有意義的詞（長度 > 2），避免 query 過長
+        words = [w for w in clean.split() if len(w) > 2][:5]
+        if not words:
+            return []
+        search_terms = "+".join(words)
         params = {
-            "search_query": f"ti:{query} OR abs:{query}",
+            "search_query": f"ti:{search_terms} OR abs:{search_terms}",
             "max_results": n_results,
             "sortBy": "relevance",
         }
-        try:
-            resp = self.session.get(ARXIV_API_URL, params=params, timeout=timeout)
-            resp.raise_for_status()
-        except Exception as e:
-            print(f"[arXiv] 關鍵字搜尋失敗：{e}")
+
+        # arXiv ToS：請求間隔至少 3 秒
+        time.sleep(3)
+
+        resp = None
+        for attempt in range(1, 4):
+            try:
+                resp = self.session.get(ARXIV_API_URL, params=params, timeout=timeout)
+                if resp.status_code == 429:
+                    wait = 10 * attempt
+                    print(f"[arXiv] 429 rate limit，等待 {wait}s 後重試...")
+                    time.sleep(wait)
+                    resp = None
+                    continue
+                resp.raise_for_status()
+                break
+            except requests.RequestException as e:
+                if attempt < 3:
+                    time.sleep(5 * attempt)
+                else:
+                    print(f"[arXiv] 關鍵字搜尋失敗：{e}")
+                    return []
+
+        if resp is None:
+            print("[arXiv] 關鍵字搜尋失敗：超過重試次數（rate limit）")
             return []
 
         try:
