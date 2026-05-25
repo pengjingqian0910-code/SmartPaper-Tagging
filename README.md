@@ -1,23 +1,58 @@
 # SmartPaper
 
-智能學術論文管理系統 — 從匯入到 AI 問答，一站式管理你的文獻庫。
+智能學術論文管理系統 — 從匯入、搜尋、問答，到 AI 輔助寫作，一站式管理你的文獻庫。
 
-## 功能
+## 功能總覽
 
 | 功能 | 說明 |
 |---|---|
-| **Excel / DOI / arXiv 匯入** | 批次匯入或一鍵貼入 DOI / arXiv ID |
+| **Excel / DOI / arXiv 匯入** | 批次匯入或一鍵貼入 DOI / arXiv ID，自動補齊元資料 |
 | **AI 自動標籤** | Gemini 分析摘要，生成結構化標籤 |
-| **PDF 全文解析** | 章節感知分割，Methodology / Results 優先 |
-| **混合語意搜尋** | ChromaDB 向量 + BM25 關鍵字，CrossEncoder 重排 |
+| **PDF 全文解析** | 章節感知分割，Methodology / Results 優先，pymupdf4llm + pdfplumber 雙引擎 |
+| **混合語意搜尋** | ChromaDB 向量 + BM25 關鍵字，CrossEncoder 重排，支援標籤 / 年份篩選 |
 | **RAG 問答** | Classic RAG 與 Function Calling 兩種模式，多輪對話，APA / MLA 引用一鍵複製，對話記錄 SQLite 持久化，匯出 Markdown |
 | **論文推薦** | 本地相似論文 + Semantic Scholar / arXiv 外部推薦，一鍵加入文獻庫 |
-| **寫作引用導引** | 三步驟引導：候選論文搜尋 → AI 分析引用 → 缺口補強。第三步優先展示外部高相關論文（arXiv），AI 根據其摘要生成 80-150 字完整學術寫作範例，可一鍵加入文獻庫 |
-| **論文管理** | 虛擬化列表（百篇無卡頓）、批次選取 / 刪除 / 重標籤、自動補齊元資料 |
+| **引用導引**（寫作前） | 三步驟：候選論文搜尋 → AI 逐篇引用分析（含英文寫作範例）→ 缺口補強（arXiv 外部論文 + 綜述段落 + 加入文獻庫） |
+| **文稿潤色**（寫作後） | 草稿評估（學術語氣 / 清晰度 / 引用充足度評分）→ 學術英文改寫 → 逐句批注 → 文庫引用推薦 → 現有引用替代建議 |
+| **論文管理** | 虛擬化列表（百篇無卡頓）、批次選取 / 刪除 / 重標籤、Semantic Scholar 自動補齊元資料 |
 | **分類系統** | 語意 / 兩階段 RAG / LLM 三種分類方法，背景執行含進度條 |
-| **知識圖譜** | 論文關係互動視覺化（內嵌 WebView）、年份柱狀圖點擊篩選該年論文 |
-| **文獻分析** | 自動生成文獻回顧比較表 |
+| **知識圖譜** | 互動式圖譜（在瀏覽器開啟）、年份柱狀圖點擊篩選、標籤共現 / 演進趨勢分析、聚焦模式（N 跳鄰居） |
+| **文獻分析** | 自動生成文獻回顧比較表（方法 / 資料集 / 指標） |
 | **設定頁面** | 管理 Gemini API Key（含連線測試）與模型選擇（即時生效） |
+
+## 寫作輔助功能詳解
+
+SmartPaper 的寫作功能分為兩種使用情境：
+
+### ✏️ 引用導引（尚未開始寫作）
+
+```
+Step 1 — 搜尋候選論文
+  輸入段落描述 → 向量搜尋 + CrossEncoder 重排 → 確認候選清單
+
+Step 2 — AI 分析引用
+  LLM 逐篇判斷是否引用、引用時機、核心概念
+  → 每篇生成 60–100 字英文寫作範例
+
+Step 3 — 缺口補強
+  LLM 找出缺少的概念 → arXiv 外部論文搜尋（優先）
+  → 所有引用論文合併為 Synthesized Literature Review（綜述段落）
+  → 外部論文可一鍵加入文獻庫
+```
+
+### 🔬 文稿潤色（已有草稿）
+
+```
+Step 1 — 評估草稿
+  Academic Tone / Clarity / Citation Adequacy 三維度評分（1–10）
+  + 優點清單 + 問題清單 + 預期改善項目
+
+Step 2 — 確認後開始潤色
+  • Before / After 並排對照
+  • 逐句批注（原文 → 改寫 + 理由）
+  • 文庫引用推薦（根據文章主題自動搜尋）
+  • 現有引用替代建議（偵測草稿中的引用，推薦文庫中更合適的論文）
+```
 
 ## 快速開始
 
@@ -69,13 +104,6 @@ bash launch.sh
 bash launch.sh
 ```
 
-**或直接從命令列啟動：**
-
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 僅首次
-.venv/bin/python main.py ui
-```
-
 ---
 
 ## 環境需求
@@ -86,7 +114,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 僅首次
 | tkinter | 內建 | `brew install python-tk@3.11` |
 | Gemini API Key | 免費取得：[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) | 同左 |
 
-API Key 可在程式內「設定」頁面隨時更換，並可即時測試連線是否有效。
+API Key 可在程式內「設定」頁面隨時更換，並可即時測試連線。
 
 ## CLI 指令
 
@@ -111,17 +139,13 @@ SmartPaper-Tagging/
 ├── launcher.py              # 啟動動畫
 ├── create_shortcut.py       # 建立 Windows 桌面捷徑
 ├── scripts/                 # 開發 / 工具腳本
-│   ├── dev.py               # 熱重載開發啟動器
-│   ├── eval_rag.py          # RAG 評估腳本
-│   ├── make_icon.py         # 圖示產生器
-│   └── generate_report.py  # 文件報告產生器
 └── smartpaper/
     ├── config.py            # 全域設定（API Key、模型選擇）
     ├── models.py            # 資料模型（Paper、TaggingResult…）
     ├── api/
     │   ├── gemini.py        # Gemini LLM（標籤、問答、分類）
     │   ├── crossref.py      # Crossref — DOI / 摘要查詢
-    │   ├── arxiv.py         # arXiv — 快速匯入 + 外部論文建議
+    │   ├── arxiv.py         # arXiv — 快速匯入 + 外部論文建議（含 rate limit 處理）
     │   └── semantic_scholar.py  # 論文推薦 + 引用關係 + 單篇查詢
     ├── database/
     │   ├── sqlite_db.py     # SQLite — 論文 metadata + 對話 Session 持久化
@@ -137,10 +161,11 @@ SmartPaper-Tagging/
     │   ├── reranker.py      # CrossEncoder 重排
     │   ├── qa_service.py    # Classic RAG 問答
     │   ├── qa_service_fc.py # Function Calling 問答
-    │   ├── writing_guide.py # 寫作引用導引（三步驟 + 外部論文優先）
+    │   ├── writing_guide.py # 引用導引（三步驟 + 英文範例 + 綜述段落）
+    │   ├── text_polish.py   # 文稿潤色（評估 + 改寫 + 批注 + 引用建議）
     │   ├── classifier.py    # 論文分類（三種方法）
     │   ├── literature_analyzer.py  # 文獻回顧分析
-    │   ├── knowledge_graph.py      # 知識圖譜
+    │   ├── knowledge_graph.py      # 知識圖譜（瀏覽器互動）
     │   ├── citation.py      # 引用關係管理
     │   ├── ingestion.py     # Excel 讀取
     │   ├── pdf_ingestion.py # PDF 全文匯入
@@ -156,8 +181,8 @@ SmartPaper-Tagging/
             ├── papers_view.py       # 論文管理（虛擬化列表 + 批次操作）
             ├── search_view.py
             ├── classify_view.py     # 分類（背景執行 + 進度條）
-            ├── writing_guide_view.py
-            ├── graph_view.py        # 知識圖譜（WebView + 年份互動）
+            ├── writing_guide_view.py  # 引用導引 + 文稿潤色（雙 Tab）
+            ├── graph_view.py        # 知識圖譜（瀏覽器 + 年份互動）
             ├── literature_view.py
             ├── qa_view.py           # 問論文（Session 持久化 + Markdown 匯出）
             └── settings_view.py     # API Key 與模型設定
@@ -175,6 +200,25 @@ SmartPaper-Tagging/
 | PDF 解析 | pymupdf4llm（主）+ pdfplumber（fallback） |
 | 資料庫 | SQLite（論文 metadata + 對話記錄）+ ChromaDB（向量） |
 | 外部文獻 | Semantic Scholar API、arXiv API（免費，無需 Key） |
+
+## 現況與未來方向
+
+SmartPaper 目前是**功能完整的研究級個人工具**，適合個人研究者或小型實驗室日常使用。
+
+**已完成的核心能力：**
+- 完整的文獻管理流程（匯入 → 標籤 → 搜尋 → 問答）
+- 雙路檢索架構（向量 + BM25 + 重排）在同類工具中屬於進階水準
+- 寫作輔助（引用導引 + 文稿潤色）是目前市面上整合度較高的設計
+
+**如果要繼續精進，優先順序建議：**
+
+| 優先度 | 方向 | 說明 |
+|---|---|---|
+| 🔴 高 | 可靠性 | 加入測試套件；更完整的 API 錯誤處理與重試邏輯 |
+| 🟡 中 | PDF 解析品質 | 對掃描版 / 複雜排版 PDF 的解析成功率仍有進步空間 |
+| 🟡 中 | 安裝體驗 | 提供 Windows/macOS 單一執行檔，降低非工程師的使用門檻 |
+| 🟢 低 | Web 版本 | 改用 Flask + React 架構以支援多人共用與遠端存取 |
+| 🟢 低 | 更多 LLM 支援 | 擴充至 OpenAI / Claude / 本地 Ollama |
 
 ## License
 
