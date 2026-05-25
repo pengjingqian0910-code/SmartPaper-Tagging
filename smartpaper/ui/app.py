@@ -15,6 +15,7 @@ from .views.graph_view import GraphView
 from .views.literature_view import LiteratureView
 from .views.qa_view import QAView
 from .views.settings_view import SettingsView
+from .views.timeline_view import TimelineView
 from . import theme as T
 
 
@@ -27,6 +28,7 @@ _NAV_ICON_NAMES = [
     ("bubble_chart",    "bubble_chart_outlined",   "圖譜工具"),
     ("menu_book",       "menu_book_outlined",      "文獻分析"),
     ("question_answer", "question_answer_outlined", "問論文"),
+    ("timeline",        "timeline_outlined",       "時間線"),
 ]
 
 
@@ -185,6 +187,7 @@ class SmartPaperApp:
         self.literature_view = LiteratureView(self.page)
         self.qa_view = QAView(self.page)
         self.settings_view = SettingsView(self.page)
+        self.timeline_view = TimelineView(self.page)
 
         try:
             home_content = self.home_view.build()
@@ -248,6 +251,7 @@ class SmartPaperApp:
             self.graph_view,
             self.literature_view,
             self.qa_view,
+            self.timeline_view,
         ]
         try:
             self.content_area.content = views[index].build()

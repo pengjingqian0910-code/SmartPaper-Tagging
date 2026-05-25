@@ -15,6 +15,7 @@ import threading
 from ...services.pipeline import Pipeline
 from ...services.search import SearchService
 from ...database.chunk_store import ChunkStore
+from ...database.sqlite_db import SQLiteDB
 from ...models import Paper
 from ...api import semantic_scholar as ss_api
 from ...api.arxiv import ArxivAPI
@@ -618,6 +619,9 @@ class PapersView:
         self._batch_row: Optional[ft.Row] = None
         self._batch_count_text: Optional[ft.Text] = None
         self._list_view: Optional[ft.ListView] = None
+        # 閱讀狀態篩選
+        self._status_filter: str = "all"   # all / starred / unread / reading / read
+        self._sqlite = SQLiteDB()
 
     # ── Build ─────────────────────────────────────────────────────────
 
@@ -693,7 +697,7 @@ class PapersView:
         self._pagination_text = ft.Text("", size=12, color=META_C)
 
         # ── 虛擬化列表（item_extent=120 只渲染可見項目）────────────────
-        self._list_view = ft.ListView(expand=True, item_extent=120, spacing=4)
+        self._list_view = ft.ListView(expand=True, item_extent=110, spacing=4)
 
         # ── 全選 + 批次操作 UI ────────────────────────────────────────
         self._select_all_cb = ft.Checkbox(
@@ -779,9 +783,12 @@ class PapersView:
             border=ft.border.all(1, BORDER),
         )
 
+        self._status_chips_row = self._build_status_chips()
+
         return ft.Column([
             header,
             filter_row,
+            self._status_chips_row,
             self._batch_row,
             self._list_view,      # 虛擬化 ListView — 自行處理滾動
             pagination_row,
@@ -802,6 +809,12 @@ class PapersView:
                       q in p.title.lower() or
                       any(q in a.lower() for a in p.authors) or
                       (p.venue and q in p.venue.lower())]
+
+        # 閱讀狀態篩選
+        if self._status_filter == "starred":
+            papers = [p for p in papers if p.starred]
+        elif self._status_filter in ("unread", "reading", "read"):
+            papers = [p for p in papers if p.read_status == self._status_filter]
 
         reverse = (self._sort_dir == -1)
         key = self._sort_by
@@ -1376,6 +1389,65 @@ class PapersView:
 
     # ── 固定高度 Tile（120px）——用於 ListView 虛擬化 ──────────────────
 
+    # ── 閱讀狀態篩選 Chips ────────────────────────────────────────────
+
+    _STATUS_CHIPS = [
+        ("all",     "全部",   "#64748B", "#F1F5F9"),
+        ("starred", "⭐ 加星", "#D97706", "#FEF3C7"),
+        ("unread",  "未讀",   "#6366F1", "#EEF2FF"),
+        ("reading", "閱讀中", "#0369A1", "#EFF6FF"),
+        ("read",    "已讀",   "#059669", "#ECFDF5"),
+    ]
+
+    def _build_status_chips(self) -> ft.Row:
+        chips = []
+        for key, label, color, bg in self._STATUS_CHIPS:
+            is_active = (key == self._status_filter)
+            chips.append(ft.Container(
+                content=ft.Text(label, size=11,
+                                color="#FFFFFF" if is_active else color,
+                                weight=ft.FontWeight.W_600 if is_active
+                                       else ft.FontWeight.NORMAL),
+                bgcolor=color if is_active else bg,
+                border=ft.border.all(1, color),
+                border_radius=50,
+                padding=ft.padding.symmetric(horizontal=12, vertical=4),
+                on_click=lambda e, k=key: self._on_status_filter(k),
+                ink=True,
+            ))
+        return ft.Row(chips, spacing=6)
+
+    def _on_status_filter(self, key: str):
+        self._status_filter = key
+        self._status_chips_row.controls = self._build_status_chips().controls
+        self._load_papers(self.selected_tag, self._search_q)
+        self._refresh_list()
+        self.page.update()
+
+    # ── 星號 / 閱讀狀態 快速操作 ─────────────────────────────────────
+
+    def _on_toggle_star(self, paper: Paper):
+        new_val = not paper.starred
+        paper.starred = new_val
+        self._sqlite.update_paper_star(paper.id, new_val)
+        self._load_papers(self.selected_tag, self._search_q)
+        self._refresh_list()
+        self.page.update()
+
+    def _on_status_cycle(self, paper: Paper):
+        """未讀 → 閱讀中 → 已讀 → 未讀"""
+        cycle = {"unread": "reading", "reading": "read", "read": "unread"}
+        new_status = cycle.get(paper.read_status, "unread")
+        paper.read_status = new_status
+        self._sqlite.update_paper_status(paper.id, new_status)
+        self._load_papers(self.selected_tag, self._search_q)
+        self._refresh_list()
+        self.page.update()
+
+    def _on_save_note(self, paper: Paper, note: str):
+        paper.personal_note = note
+        self._sqlite.update_paper_note(paper.id, note)
+
     def _build_paper_tile(self, paper: Paper) -> ft.Container:
         p = paper
         auth = (p.authors[0] + (" et al." if len(p.authors) > 1 else "")) if p.authors else "作者不詳"
@@ -1398,64 +1470,106 @@ class PapersView:
         if len(p.tags or []) > 3:
             badges.append(ft.Text(f"+{len(p.tags) - 3}", size=9, color=META_C))
 
+        # 緊湊刪除按鈕
         del_btn = ft.Container(
-            content=ft.Text("刪除", size=9, color=RED),
+            content=ft.Icon("delete_outline", size=13, color=RED),
             on_click=lambda e, pp=p: self._on_delete(pp),
-            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            padding=ft.padding.all(3),
             border_radius=4,
-            border=ft.border.all(1, "#FECACA"),
-            bgcolor="#FFF5F5",
             tooltip="刪除此論文",
         )
+        # 詳細資訊按鈕
         detail_btn = ft.Container(
             content=ft.Row([
                 ft.Text("詳細資訊", size=9, color=ACCENT),
-                ft.Icon("chevron_right", size=11, color=ACCENT),
+                ft.Icon("chevron_right", size=10, color=ACCENT),
             ], spacing=2, tight=True),
             on_click=lambda e, pp=p: self._open_card_dialog(pp),
-            padding=ft.padding.symmetric(horizontal=7, vertical=2),
+            padding=ft.padding.symmetric(horizontal=7, vertical=3),
             border_radius=4,
             border=ft.border.all(1, "#C7D2FE"),
             bgcolor="#EEF2FF",
-            tooltip="查看摘要、DOI、相似論文等詳細資訊",
+            tooltip="查看摘要、功能、相似論文",
         )
-        fulltext_icon = ft.Container(
-            content=ft.Icon("menu_book", size=11, color="#065F46"),
-            padding=ft.padding.symmetric(horizontal=4, vertical=2),
-            border_radius=4,
+        fulltext_badge = ft.Container(
+            content=ft.Text("全文", size=8, color="#065F46"),
             bgcolor="#ECFDF5",
+            border=ft.border.all(1, "#A7F3D0"),
+            border_radius=4,
+            padding=ft.padding.symmetric(horizontal=4, vertical=1),
             tooltip="已上傳全文 PDF",
         ) if has_fulltext else ft.Container(width=0)
+
+        # 緊湊星號（用 Container+Icon 代替 IconButton 以節省高度）
+        star_ctrl = ft.Container(
+            content=ft.Icon("star" if p.starred else "star_border",
+                            size=14,
+                            color="#F59E0B" if p.starred else "#D1D5DB"),
+            on_click=lambda e, pp=p: self._on_toggle_star(pp),
+            padding=ft.padding.all(2),
+            border_radius=4,
+            tooltip="取消星號" if p.starred else "加星號",
+        )
+
+        # 閱讀狀態 chip（點擊循環切換）
+        _sc = {"unread": ("未讀", "#6366F1", "#EEF2FF"),
+               "reading": ("閱讀中", "#0369A1", "#DBEAFE"),
+               "read": ("已讀", "#059669", "#DCFCE7")}
+        slabel, scolor, sbg = _sc.get(p.read_status, ("未讀", "#6366F1", "#EEF2FF"))
+        status_chip = ft.Container(
+            content=ft.Text(slabel, size=8, color=scolor),
+            bgcolor=sbg,
+            border=ft.border.all(1, scolor),
+            border_radius=50,
+            padding=ft.padding.symmetric(horizontal=5, vertical=1),
+            on_click=lambda e, pp=p: self._on_status_cycle(pp),
+            tooltip="點擊切換閱讀狀態",
+        )
+
+        note_dot = (
+            ft.Container(width=6, height=6, bgcolor="#A78BFA",
+                         border_radius=10, tooltip="有個人筆記")
+            if p.personal_note else ft.Container(width=0)
+        )
+
+        # ── 3 行緊湊佈局 ─────────────────────────────────────────────
+        row1 = ft.Row([
+            ft.Text(p.title, size=13, weight=ft.FontWeight.W_600, color=TITLE_C,
+                    expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+            fulltext_badge, del_btn,
+        ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        row2 = ft.Row([
+            ft.Text(auth, size=10, color=AUTH_C, expand=True,
+                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+            ft.Text(str(p.year) if p.year else "", size=10, color=META_C),
+        ], spacing=6)
+
+        row3 = ft.Row(
+            [status_chip] + badges[:3] + [note_dot,
+             ft.Container(expand=True), star_ctrl, detail_btn],
+            spacing=4,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
 
         return ft.Container(
             content=ft.Row([
                 cb,
-                ft.Column([
-                    ft.Row([
-                        ft.Text(p.title, size=13, weight=ft.FontWeight.W_600, color=TITLE_C,
-                                expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                        fulltext_icon,
-                        del_btn,
-                    ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.START),
-                    ft.Text(auth, size=11, color=AUTH_C, max_lines=1,
-                            overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.Row(badges, spacing=4, wrap=False),
-                    ft.Row([ft.Container(expand=True), detail_btn]),
-                ], spacing=4, expand=True),
+                ft.Column([row1, row2, row3], spacing=3, expand=True),
             ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            height=110,
+            height=100,
             padding=ft.padding.symmetric(horizontal=14, vertical=8),
-            border=ft.border.all(1, BORDER),
+            border=ft.border.all(1, "#FEF3C7" if p.starred else BORDER),
             border_radius=10,
-            bgcolor=CARD,
+            bgcolor="#FFFBEB" if p.starred else CARD,
             shadow=ft.BoxShadow(blur_radius=3, spread_radius=0,
                                 color="#06000000", offset=ft.Offset(0, 1)),
         )
 
     def _open_card_dialog(self, paper: Paper):
-        """開啟詳細資訊 Dialog（含展開式 _Card）。"""
+        """開啟詳細資訊 Dialog（含展開式 _Card + 個人化區塊）。"""
         has_fulltext = paper.id in self._fulltext_ids
-        card_ctrl = _Card(
+        card_obj = _Card(
             paper, self._on_delete, self._on_tag_remove, self.page,
             has_fulltext=has_fulltext,
             on_read_fulltext=self._on_read_fulltext,
@@ -1464,7 +1578,133 @@ class PapersView:
             visible_fields=self._visible_fields,
             custom_fields=self._custom_fields,
             custom_field_values=self._custom_field_values,
-        ).build()
+        )
+        card_ctrl = card_obj.build()
+        # 進詳細頁面時自動展開摘要 + 所有功能按鈕，避免使用者不知道有更多內容
+        card_obj._expanded = True
+        if card_obj._detail_col:
+            card_obj._detail_col.visible = True
+        if card_obj._container:
+            card_obj._container.border = ft.border.all(1.5, BORDER_A)
+
+        # ── 個人化區塊（閱讀狀態 + 星號 + 筆記）──────────────────────
+        _status_colors = {
+            "unread":  ("#6366F1", "#EEF2FF"),
+            "reading": ("#0369A1", "#DBEAFE"),
+            "read":    ("#059669", "#DCFCE7"),
+        }
+        _status_labels = {"unread": "未讀", "reading": "閱讀中", "read": "已讀"}
+
+        def _status_btn(key: str) -> ft.Container:
+            active = (paper.read_status == key)
+            color, bg = _status_colors[key]
+            return ft.Container(
+                content=ft.Text(_status_labels[key], size=11,
+                                color="#FFFFFF" if active else color,
+                                weight=ft.FontWeight.W_600 if active
+                                       else ft.FontWeight.NORMAL),
+                bgcolor=color if active else bg,
+                border=ft.border.all(1, color),
+                border_radius=50,
+                padding=ft.padding.symmetric(horizontal=12, vertical=4),
+                on_click=lambda e, k=key: _set_status(k),
+                ink=True,
+            )
+
+        status_row_ref: list = []   # mutable container for rebuild
+
+        def _rebuild_status_row():
+            status_row_ref[0].controls = [
+                ft.Text("閱讀狀態：", size=12, color=AUTH_C),
+                _status_btn("unread"),
+                _status_btn("reading"),
+                _status_btn("read"),
+            ]
+            try:
+                status_row_ref[0].update()
+            except Exception:
+                self.page.update()
+
+        def _set_status(key: str):
+            paper.read_status = key
+            self._sqlite.update_paper_status(paper.id, key)
+            _rebuild_status_row()
+            self._load_papers(self.selected_tag, self._search_q)
+            self._refresh_list()
+            self.page.update()
+
+        status_row = ft.Row([
+            ft.Text("閱讀狀態：", size=12, color=AUTH_C),
+            _status_btn("unread"),
+            _status_btn("reading"),
+            _status_btn("read"),
+        ], spacing=8)
+        status_row_ref.append(status_row)
+
+        star_btn_ref: list = [None]
+
+        def _rebuild_star():
+            star_btn_ref[0].icon = "star" if paper.starred else "star_border"
+            star_btn_ref[0].icon_color = "#F59E0B" if paper.starred else "#CBD5E1"
+            star_btn_ref[0].tooltip = "取消星號" if paper.starred else "加星號"
+            try:
+                star_btn_ref[0].update()
+            except Exception:
+                self.page.update()
+
+        def _toggle_star_dialog(_e):
+            paper.starred = not paper.starred
+            self._sqlite.update_paper_star(paper.id, paper.starred)
+            _rebuild_star()
+            self._load_papers(self.selected_tag, self._search_q)
+            self._refresh_list()
+            self.page.update()
+
+        star_icon_btn = ft.IconButton(
+            icon="star" if paper.starred else "star_border",
+            icon_color="#F59E0B" if paper.starred else "#CBD5E1",
+            icon_size=22,
+            tooltip="取消星號" if paper.starred else "加星號",
+            on_click=_toggle_star_dialog,
+        )
+        star_btn_ref[0] = star_icon_btn
+
+        note_field = ft.TextField(
+            label="個人筆記",
+            hint_text="記錄你對這篇論文的想法、疑問或與自己研究的關聯…",
+            value=paper.personal_note,
+            multiline=True, min_lines=3, max_lines=6,
+            border_color="#A78BFA",
+            focused_border_color="#7C3AED",
+        )
+        note_save_btn = ft.ElevatedButton(
+            "儲存筆記", icon="save_outlined",
+            style=ft.ButtonStyle(bgcolor="#7C3AED", color=ft.colors.WHITE),
+            on_click=lambda e: (
+                self._on_save_note(paper, note_field.value or ""),
+                setattr(note_save_btn, "text", "✓ 已儲存"),
+                note_save_btn.update(),
+            ),
+        )
+
+        personal_section = ft.Container(
+            content=ft.Column([
+                ft.Divider(height=6, color="#E2E8F0"),
+                ft.Row([
+                    ft.Icon("person_pin", color="#7C3AED", size=14),
+                    ft.Text("個人化", size=12, weight=ft.FontWeight.W_600,
+                            color="#7C3AED"),
+                ], spacing=6),
+                ft.Row([status_row, ft.Container(expand=True), star_icon_btn],
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                note_field,
+                ft.Row([ft.Container(expand=True), note_save_btn]),
+            ], spacing=8),
+            bgcolor="#FAF5FF",
+            border=ft.border.all(1, "#DDD6FE"),
+            border_radius=10,
+            padding=12,
+        )
 
         dlg = ft.AlertDialog(
             modal=True,
@@ -1473,8 +1713,9 @@ class PapersView:
                 size=14, weight=ft.FontWeight.W_600, color=TITLE_C,
             ),
             content=ft.Container(
-                content=ft.Column([card_ctrl], scroll=ft.ScrollMode.AUTO),
-                width=700, height=520,
+                content=ft.Column([card_ctrl, personal_section],
+                                  scroll=ft.ScrollMode.AUTO),
+                width=700, height=560,
             ),
             actions=[
                 ft.TextButton("關閉", on_click=lambda e: self._close_dlg(dlg)),

@@ -107,11 +107,22 @@ class SQLiteDB:
                 "ALTER TABLE papers ADD COLUMN year INTEGER",
                 "ALTER TABLE papers ADD COLUMN citation_count INTEGER",
                 "ALTER TABLE papers ADD COLUMN pdf_path TEXT",
+                "ALTER TABLE papers ADD COLUMN read_status TEXT DEFAULT 'unread'",
+                "ALTER TABLE papers ADD COLUMN starred INTEGER DEFAULT 0",
+                "ALTER TABLE papers ADD COLUMN personal_note TEXT DEFAULT ''",
             ]:
                 try:
                     conn.execute(col_def)
                 except Exception:
                     pass  # 欄位已存在則忽略
+
+            # 使用者研究身份設定
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_profile (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
+                )
+            """)
 
             conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_title ON papers(title)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_doi ON papers(doi)")
@@ -176,6 +187,9 @@ class SQLiteDB:
             citation_count=row["citation_count"] if "citation_count" in keys else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            read_status=row["read_status"] if "read_status" in keys and row["read_status"] else "unread",
+            starred=bool(row["starred"]) if "starred" in keys and row["starred"] else False,
+            personal_note=row["personal_note"] if "personal_note" in keys and row["personal_note"] else "",
         )
 
     def insert(self, paper: Paper) -> int:
@@ -395,6 +409,52 @@ class SQLiteDB:
             self._cache_evict(paper_id)
             return True
         return False
+
+    # ── 閱讀狀態 / 星號 / 個人筆記 ───────────────────────────────────
+
+    def update_paper_status(self, paper_id: int, status: str) -> None:
+        """status: 'unread' | 'reading' | 'read'"""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE papers SET read_status = ?, updated_at = ? WHERE id = ?",
+                (status, datetime.now().isoformat(), paper_id),
+            )
+            conn.commit()
+        self._cache_evict(paper_id)
+
+    def update_paper_star(self, paper_id: int, starred: bool) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE papers SET starred = ?, updated_at = ? WHERE id = ?",
+                (1 if starred else 0, datetime.now().isoformat(), paper_id),
+            )
+            conn.commit()
+        self._cache_evict(paper_id)
+
+    def update_paper_note(self, paper_id: int, note: str) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE papers SET personal_note = ?, updated_at = ? WHERE id = ?",
+                (note, datetime.now().isoformat(), paper_id),
+            )
+            conn.commit()
+        self._cache_evict(paper_id)
+
+    # ── 使用者研究身份 ────────────────────────────────────────────────
+
+    def get_user_profile(self) -> dict[str, str]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT key, value FROM user_profile").fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+    def set_user_profile(self, key: str, value: str) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO user_profile (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            conn.commit()
 
     def count(self) -> int:
         """取得論文總數"""
@@ -737,10 +797,11 @@ class SQLiteDB:
             )
             conn.commit()
 
-    def get_chat_sessions(self) -> list[dict]:
+    def get_chat_sessions(self, limit: int = 200) -> list[dict]:
         with self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 20"
+                "SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
 

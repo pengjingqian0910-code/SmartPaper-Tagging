@@ -16,6 +16,7 @@ from ...config import (
     set_gemini_api_key,
     set_gemini_model,
 )
+from ...database.sqlite_db import SQLiteDB
 
 
 def _card(title: str, icon: str, icon_color: str,
@@ -40,6 +41,7 @@ class SettingsView:
     def __init__(self, page: ft.Page):
         self.page = page
         self._snack_shown = False
+        self._sqlite = SQLiteDB()
 
     def build(self) -> ft.Control:
         self._update_info: Optional[dict] = None
@@ -53,12 +55,86 @@ class SettingsView:
             ]),
             ft.Divider(height=1, color="#E2E8F0"),
             ft.Column([
+                self._build_profile_card(),
                 self._build_api_key_card(),
                 self._build_model_card(),
                 self._build_update_card(),
                 self._build_about_card(),
             ], spacing=16, scroll=ft.ScrollMode.AUTO, expand=True),
         ], expand=True, spacing=12)
+
+    # ── 研究身份卡片 ─────────────────────────────────────────────────────────
+
+    def _build_profile_card(self) -> ft.Control:
+        profile = self._sqlite.get_user_profile()
+
+        self._profile_field = ft.TextField(
+            label="研究領域",
+            hint_text="例如：Natural Language Processing, Computer Vision",
+            value=profile.get("research_field", ""),
+            prefix_icon=ft.icons.SCHOOL_OUTLINED,
+            border_color="#0D9488",
+            focused_border_color="#0F766E",
+            expand=True,
+        )
+        self._keywords_field = ft.TextField(
+            label="核心關鍵詞（逗號分隔）",
+            hint_text="例如：transformer, BERT, fine-tuning, few-shot",
+            value=profile.get("research_keywords", ""),
+            prefix_icon=ft.icons.LABEL_OUTLINED,
+            border_color="#0D9488",
+            focused_border_color="#0F766E",
+            expand=True,
+        )
+        self._style_dropdown = ft.Dropdown(
+            label="寫作風格偏好",
+            value=profile.get("writing_style", "balanced"),
+            options=[
+                ft.dropdown.Option("formal",   "正式學術（Formal Academic）"),
+                ft.dropdown.Option("balanced", "平衡簡潔（Balanced & Clear）"),
+                ft.dropdown.Option("concise",  "精簡扼要（Concise）"),
+            ],
+            border_color="#0D9488",
+            focused_border_color="#0F766E",
+            expand=True,
+        )
+        self._profile_status = ft.Text("", size=11)
+
+        save_btn = ft.ElevatedButton(
+            "儲存研究身份", icon=ft.icons.SAVE_OUTLINED,
+            on_click=self._on_save_profile,
+            style=ft.ButtonStyle(bgcolor="#0D9488", color=ft.colors.WHITE),
+        )
+
+        content = ft.Column([
+            ft.Text(
+                "設定你的研究背景，讓 AI 問答和文稿潤色更貼近你的領域與寫作習慣。",
+                size=11, color=ft.colors.GREY_600,
+            ),
+            self._profile_field,
+            self._keywords_field,
+            self._style_dropdown,
+            ft.Row([save_btn, self._profile_status],
+                   spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=10)
+
+        return _card("研究身份設定", ft.icons.PERSON_OUTLINED, "#0D9488",
+                     content, "#CCFBF1")
+
+    def _on_save_profile(self, e):
+        self._sqlite.set_user_profile("research_field",
+                                      (self._profile_field.value or "").strip())
+        self._sqlite.set_user_profile("research_keywords",
+                                      (self._keywords_field.value or "").strip())
+        self._sqlite.set_user_profile("writing_style",
+                                      self._style_dropdown.value or "balanced")
+        self._profile_status.value = "✓ 已儲存"
+        self._profile_status.color = ft.colors.GREEN_700
+        try:
+            self._profile_status.update()
+        except Exception:
+            pass
+        self._show_snack("研究身份已儲存，即時套用至 AI 問答與文稿潤色")
 
     # ── API Key 卡片 ──────────────────────────────────────────────────────────
 

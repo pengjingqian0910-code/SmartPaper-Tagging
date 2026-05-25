@@ -7,7 +7,7 @@
 import threading
 import uuid as _uuid
 import flet as ft
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -127,6 +127,8 @@ class QAView:
         self._current_session_idx: int = 0
         self._session_counter: int = 0
         self._session_bar: Optional[ft.Row] = None
+        # 歷史對話面板
+        self._history_panel_col: Optional[ft.Column] = None
         # PDF 管理面板 折疊狀態
         self._pdf_mgmt_visible = False
         self._pdf_mgmt_content: Optional[ft.Column] = None
@@ -239,6 +241,7 @@ class QAView:
         # ── 左側：側邊欄 ─────────────────────────────────────────────
         left_col = ft.Container(
             content=ft.Column([
+                self._build_history_panel(),
                 self._build_source_panel(),
                 self._build_pdf_panel(),
             ], spacing=10, scroll=ft.ScrollMode.AUTO),
@@ -282,6 +285,210 @@ class QAView:
             ft.Row([left_col, right_col], expand=True, spacing=0,
                    vertical_alignment=ft.CrossAxisAlignment.START),
         ], expand=True, spacing=8)
+
+    # ── 側邊欄 Section 0：歷史對話 ───────────────────────────────────────
+
+    def _build_history_panel(self) -> ft.Control:
+        new_btn = ft.ElevatedButton(
+            "新對話", icon="add", height=30,
+            on_click=self._on_new_session,
+            style=ft.ButtonStyle(bgcolor="#6D28D9", color=ft.colors.WHITE),
+        )
+        self._history_panel_col = ft.Column(spacing=3, scroll=ft.ScrollMode.AUTO)
+        self._refresh_history_panel()
+
+        return _sidebar_card(
+            "歷史對話", "history", "#6D28D9",
+            ft.Column([
+                new_btn,
+                ft.Container(
+                    content=self._history_panel_col,
+                    height=220,
+                    border=ft.border.all(1, "#DDD6FE"),
+                    border_radius=6,
+                    padding=ft.padding.symmetric(horizontal=6, vertical=4),
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                ),
+            ], spacing=6),
+            bgcolor="#F5F3FF",
+            border_color="#DDD6FE",
+        )
+
+    def _date_group(self, updated_at_str: str) -> str:
+        try:
+            dt = datetime.fromisoformat(updated_at_str).date()
+            today = date.today()
+            if dt == today:
+                return "今天"
+            if dt == today - timedelta(days=1):
+                return "昨天"
+            if dt >= today - timedelta(days=7):
+                return "本週"
+            return datetime.fromisoformat(updated_at_str).strftime("%Y/%m")
+        except Exception:
+            return "更早"
+
+    def _refresh_history_panel(self):
+        if self._history_panel_col is None:
+            return
+        self._history_panel_col.controls.clear()
+
+        try:
+            sessions = self._sqlite.get_chat_sessions()
+        except Exception:
+            sessions = []
+
+        if not sessions:
+            self._history_panel_col.controls.append(
+                ft.Text("（還沒有歷史對話）", size=11,
+                        color=ft.colors.GREY_500, italic=True)
+            )
+            return
+
+        active_uuid = (
+            self._sessions[self._current_session_idx].get("uuid", "")
+            if self._sessions and self._current_session_idx < len(self._sessions)
+            else ""
+        )
+
+        # Group by date label, preserving order
+        groups: dict[str, list] = {}
+        for s in sessions:
+            label = self._date_group(s.get("updated_at", ""))
+            groups.setdefault(label, []).append(s)
+
+        group_order = ["今天", "昨天", "本週"]
+        seen = set()
+        for g in group_order:
+            if g in groups:
+                self._render_history_group(g, groups[g], active_uuid)
+                seen.add(g)
+        for g, items in groups.items():
+            if g not in seen:
+                self._render_history_group(g, items, active_uuid)
+
+    def _render_history_group(self, label: str, sessions: list, active_uuid: str):
+        self._history_panel_col.controls.append(
+            ft.Text(label, size=9, weight=ft.FontWeight.W_600,
+                    color=ft.colors.GREY_500)
+        )
+        for s in sessions:
+            uuid = s["session_id"]
+            is_active = (uuid == active_uuid)
+            title = s["title"]
+            display = title[:24] + ("…" if len(title) > 24 else "")
+            self._history_panel_col.controls.append(
+                ft.Container(
+                    content=ft.Row([
+                        ft.Text(
+                            display, size=11, expand=True,
+                            overflow=ft.TextOverflow.ELLIPSIS, max_lines=1,
+                            weight=ft.FontWeight.W_600 if is_active
+                                   else ft.FontWeight.NORMAL,
+                            color="#6D28D9" if is_active else "#374151",
+                        ),
+                        ft.IconButton(
+                            icon="delete_outline", icon_size=12,
+                            icon_color=ft.colors.GREY_400,
+                            tooltip="刪除此對話",
+                            on_click=lambda e, uid=uuid: self._on_delete_history(uid),
+                            style=ft.ButtonStyle(padding=ft.padding.all(0)),
+                        ),
+                    ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    bgcolor="#EDE9FE" if is_active else "#FFFFFF",
+                    border=ft.border.all(1, "#7C3AED" if is_active else "#E2E8F0"),
+                    border_radius=6,
+                    padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                    on_click=lambda e, uid=uuid: self._on_load_history_session(uid),
+                    ink=not is_active,
+                )
+            )
+
+    def _on_load_history_session(self, session_uuid: str):
+        """點擊歷史對話項目：若在記憶體中直接切換，否則從 SQLite 載入。"""
+        for i, s in enumerate(self._sessions):
+            if s.get("uuid") == session_uuid:
+                self._switch_session(i)
+                self._refresh_history_panel()
+                try:
+                    self._history_panel_col.update()
+                except Exception:
+                    self.page.update()
+                return
+
+        # 從 SQLite 載入
+        self._save_current_session()
+        try:
+            all_sessions = self._sqlite.get_chat_sessions()
+            info = next((x for x in all_sessions
+                         if x["session_id"] == session_uuid), None)
+            if not info:
+                return
+            db_msgs = self._sqlite.get_chat_messages(session_uuid)
+        except Exception as ex:
+            self._append_error(f"載入歷史對話失敗：{ex}")
+            return
+
+        self._session_counter += 1
+        session = {
+            "id":              self._session_counter,
+            "uuid":            session_uuid,
+            "title":           info["title"],
+            "history":         [],
+            "messages":        [],
+            "source_paper_ids": None,
+            "last_result":     None,
+        }
+        for msg in db_msgs:
+            content = msg["content"]
+            if msg["role"] == "user":
+                session["history"].append(ChatMessage(role="user", content=content))
+                session["messages"].append({"type": "user", "text": content})
+            elif msg["role"] == "assistant":
+                result = QAResult(answer=content, query="")
+                session["history"].append(
+                    ChatMessage(role="assistant", content=content))
+                session["messages"].append({"type": "assistant", "result": result})
+
+        # 若 tab 已滿，替換掉最舊的非當前 session
+        if len(self._sessions) >= MAX_SESSIONS:
+            oldest = next(
+                (i for i in range(len(self._sessions))
+                 if i != self._current_session_idx),
+                None,
+            )
+            if oldest is not None:
+                self._sessions.pop(oldest)
+                if oldest < self._current_session_idx:
+                    self._current_session_idx -= 1
+
+        self._sessions.append(session)
+        self._current_session_idx = len(self._sessions) - 1
+        self._history            = session["history"]
+        self._source_paper_ids   = None
+        self._last_result        = None
+        self._restore_session(session)
+        self._rebuild_session_bar()
+        self._refresh_history_panel()
+        self.page.update()
+
+    def _on_delete_history(self, session_uuid: str):
+        """從歷史面板刪除對話（SQLite + 記憶體）。"""
+        try:
+            self._sqlite.delete_chat_session(session_uuid)
+        except Exception:
+            pass
+
+        for i, s in enumerate(self._sessions):
+            if s.get("uuid") == session_uuid:
+                self._delete_session(i)
+                break
+
+        self._refresh_history_panel()
+        try:
+            self._history_panel_col.update()
+        except Exception:
+            self.page.update()
 
     # ── 側邊欄 Section 1：問答來源選擇 ──────────────────────────────────
 
@@ -881,6 +1088,7 @@ class QAView:
         self._last_result = None
         self._restore_session(new_s)
         self._rebuild_session_bar()
+        self._refresh_history_panel()
         self.page.update()
 
     def _delete_session(self, idx: int):
@@ -888,6 +1096,12 @@ class QAView:
             # 最後一個 session：只清空，不刪除
             self._on_clear(None)
             return
+        uuid_to_delete = self._sessions[idx].get("uuid", "")
+        if uuid_to_delete:
+            try:
+                self._sqlite.delete_chat_session(uuid_to_delete)
+            except Exception:
+                pass
         self._sessions.pop(idx)
         new_idx = max(0, min(self._current_session_idx, len(self._sessions) - 1))
         if idx < self._current_session_idx:
@@ -1040,6 +1254,7 @@ class QAView:
                 pass
             self._rebuild_session_bar()
             self._session_bar.update()
+            self._refresh_history_panel()
 
         loading_ctrl = self._loading_bubble()
         self._chat_column.controls.append(loading_ctrl)

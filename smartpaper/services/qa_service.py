@@ -345,6 +345,29 @@ class QAService:
             parts.append(f"{header}\n{sc.snippet}")
         return "\n\n".join(parts)
 
+    def _get_user_profile_text(self) -> str:
+        """載入使用者研究身份設定，組成 prompt 前綴。"""
+        try:
+            profile = self.sqlite_db.get_user_profile()
+        except Exception:
+            return ""
+        parts = []
+        if profile.get("research_field"):
+            parts.append(f"研究領域：{profile['research_field']}")
+        if profile.get("research_keywords"):
+            parts.append(f"核心關鍵詞：{profile['research_keywords']}")
+        style_map = {
+            "formal":   "正式學術語氣，使用嚴謹術語",
+            "balanced": "平衡簡潔，學術但易懂",
+            "concise":  "精簡扼要，避免冗余",
+        }
+        style = style_map.get(profile.get("writing_style", ""), "")
+        if style:
+            parts.append(f"偏好回答風格：{style}")
+        if not parts:
+            return ""
+        return "【使用者研究背景】\n" + "\n".join(parts)
+
     def _build_prompt(
         self,
         question: str,
@@ -352,6 +375,9 @@ class QAService:
         history: list[ChatMessage],
         memory_text: str = "",
     ) -> str:
+        profile_text = self._get_user_profile_text()
+        profile_block = f"\n\n{profile_text}" if profile_text else ""
+
         system = (
             "你是一位專業的學術研究助理，擅長根據論文內容回答研究問題。\n"
             "回答規則：\n"
@@ -359,8 +385,9 @@ class QAService:
             "2. 若參考資料只有部分相關，請根據現有資料給出最佳回答，並說明資料的侷限\n"
             "3. 若有表格資料（標記為「表格」），可以引用其中的數字或比較結果\n"
             "4. 若【對話記憶】中有相關內容，可結合使用，但仍以【參考資料】為主\n"
-            "5. 回答使用繁體中文，語氣學術但易於理解\n"
-            "6. 只有在參考資料完全沒有任何相關內容時，才說明無法回答，並建議使用者補充相關論文\n"
+            "5. 若有【使用者研究背景】，請根據其領域與風格偏好調整回答深度與語氣\n"
+            "6. 回答使用繁體中文，語氣學術但易於理解\n"
+            "7. 只有在參考資料完全沒有任何相關內容時，才說明無法回答，並建議使用者補充相關論文\n"
         )
 
         trimmed = history[-(MAX_HISTORY_TURNS * 2):]
@@ -376,6 +403,7 @@ class QAService:
 
         return (
             f"{system}"
+            f"{profile_block}"
             f"{memory_block}"
             f"{history_text}\n\n"
             f"【參考資料】\n{context}\n\n"

@@ -23,6 +23,10 @@ class Paper(BaseModel):
     citation_count: Optional[int] = Field(default=None, description="被引用次數（Semantic Scholar）")
     created_at: datetime = Field(default_factory=datetime.now, description="建立時間")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新時間")
+    # 個人化欄位
+    read_status: str = Field(default="unread", description="閱讀狀態：unread / reading / read")
+    starred: bool = Field(default=False, description="是否加星號")
+    personal_note: str = Field(default="", description="個人筆記")
 
     class Config:
         json_encoders = {

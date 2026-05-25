@@ -848,13 +848,15 @@ class HomeView:
                     for t in (p.tags or []):
                         tag_counter[t] += 1
 
-                top_tags = [t for t, _ in tag_counter.most_common(3)]
-                if not top_tags:
+                import random
+                top_candidates = [t for t, _ in tag_counter.most_common(10)]
+                if not top_candidates:
                     self._arxiv_status.value = "⚠️ 尚無標籤，請先匯入並標記論文"
                     self._arxiv_status.color = T.ROSE
                     return
+                top_tags = random.sample(top_candidates, min(3, len(top_candidates)))
 
-                query = " OR ".join(top_tags[:3])
+                query = " OR ".join(top_tags)
                 from ...api.arxiv import ArxivAPI
                 arxiv = ArxivAPI()
                 results = arxiv.search_by_keywords(query, n_results=8)

@@ -392,9 +392,10 @@ class WritingGuideView:
                 result = self._polish_service.polish(text, progress_callback=prog)
                 self._polish_result = result
                 self._polish_results.controls.clear()
-                self._polish_results.controls.append(
-                    self._build_polish_result_card(text, result)
-                )
+                # 各 section 各自是一個 Control，直接加入 scroll column
+                # 避免巢狀 Column 造成捲動失效
+                for ctrl in self._build_polish_sections(text, result):
+                    self._polish_results.controls.append(ctrl)
             except Exception as ex:
                 self._polish_status.value = f"失敗：{ex}"
                 self._polish_results.controls.clear()
@@ -407,7 +408,7 @@ class WritingGuideView:
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _build_polish_result_card(self, original: str, result: PolishResult) -> ft.Control:
+    def _build_polish_sections(self, original: str, result: PolishResult) -> list[ft.Control]:
         violet = "#7C3AED"
         violet_bg = "#F5F3FF"
         violet_border = "#DDD6FE"
@@ -618,12 +619,7 @@ class WritingGuideView:
                 bgcolor="#FFFBEB",
             )
 
-        return ft.Column([
-            comparison,
-            annotation_ctrl,
-            cite_ctrl,
-            alt_ctrl,
-        ], spacing=14)
+        return [comparison, annotation_ctrl, cite_ctrl, alt_ctrl]
 
     # ── 步驟按鈕工廠 ────────────────────────────────────────────────────
 
