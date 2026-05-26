@@ -5,6 +5,7 @@ Arxiv API 模組
 
 import re
 import time
+import threading
 import xml.etree.ElementTree as ET
 from typing import Optional
 
@@ -24,6 +25,27 @@ _RETRY = Retry(
     allowed_methods=["GET"],
     raise_on_status=False,
 )
+
+# ── 模組級速率限制 ────────────────────────────────────────────────
+# 確保兩次 arXiv 請求之間至少間隔 MIN_INTERVAL 秒
+_rate_lock = threading.Lock()
+_last_request_time: float = 0.0
+_MIN_INTERVAL = 5.0   # seconds
+
+# ── 關鍵字搜尋結果快取（TTL 10 分鐘）────────────────────────────
+_kw_cache: dict[str, tuple[float, list]] = {}  # query → (timestamp, results)
+_KW_CACHE_TTL = 600  # seconds
+
+
+def _rate_limit_wait():
+    """等待至距上次請求超過 _MIN_INTERVAL 秒再繼續。"""
+    global _last_request_time
+    with _rate_lock:
+        now = time.time()
+        elapsed = now - _last_request_time
+        if elapsed < _MIN_INTERVAL:
+            time.sleep(_MIN_INTERVAL - elapsed)
+        _last_request_time = time.time()
 
 
 class ArxivAPI:
@@ -109,30 +131,39 @@ class ArxivAPI:
         if not words:
             return []
         search_terms = "+".join(words)
+        cache_key = search_terms
+
+        # ── TTL 快取：同樣 query 10 分鐘內直接回傳，不再打 API ──
+        if cache_key in _kw_cache:
+            ts, cached = _kw_cache[cache_key]
+            if time.time() - ts < _KW_CACHE_TTL:
+                return cached
+
         params = {
             "search_query": f"ti:{search_terms} OR abs:{search_terms}",
             "max_results": n_results,
             "sortBy": "relevance",
         }
 
-        # arXiv ToS：請求間隔至少 3 秒
-        time.sleep(3)
+        # 模組級速率限制：確保距上次請求 ≥ 5s
+        _rate_limit_wait()
 
         resp = None
         for attempt in range(1, 4):
             try:
                 resp = self.session.get(ARXIV_API_URL, params=params, timeout=timeout)
                 if resp.status_code == 429:
-                    wait = 10 * attempt
+                    wait = 30 * attempt   # 30s / 60s / 90s
                     print(f"[arXiv] 429 rate limit，等待 {wait}s 後重試...")
                     time.sleep(wait)
+                    _rate_limit_wait()
                     resp = None
                     continue
                 resp.raise_for_status()
                 break
             except requests.RequestException as e:
                 if attempt < 3:
-                    time.sleep(5 * attempt)
+                    time.sleep(10 * attempt)
                 else:
                     print(f"[arXiv] 關鍵字搜尋失敗：{e}")
                     return []
@@ -183,6 +214,8 @@ class ArxivAPI:
                 "authors":   authors,
             })
 
+        # 寫入快取
+        _kw_cache[cache_key] = (time.time(), results)
         return results
 
     def _parse_best_match(self, xml_text: str, original_title: str) -> Optional[dict]:
