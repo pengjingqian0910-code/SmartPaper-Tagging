@@ -27,25 +27,45 @@ _RETRY = Retry(
 )
 
 # ── 模組級速率限制 ────────────────────────────────────────────────
-# 確保兩次 arXiv 請求之間至少間隔 MIN_INTERVAL 秒
+# 所有 arXiv 請求共用同一把鎖，確保串行執行且間距 ≥ MIN_INTERVAL
 _rate_lock = threading.Lock()
 _last_request_time: float = 0.0
-_MIN_INTERVAL = 5.0   # seconds
+_backoff_until: float = 0.0       # 收到 429 後全域封鎖到此時間點
+_MIN_INTERVAL = 8.0               # 正常請求間距（秒）
+_BACKOFF_SECS  = 300.0            # 收到 429 後封鎖 5 分鐘
 
 # ── 關鍵字搜尋結果快取（TTL 10 分鐘）────────────────────────────
 _kw_cache: dict[str, tuple[float, list]] = {}  # query → (timestamp, results)
 _KW_CACHE_TTL = 600  # seconds
 
 
-def _rate_limit_wait():
-    """等待至距上次請求超過 _MIN_INTERVAL 秒再繼續。"""
+def _rate_limit_wait() -> bool:
+    """
+    等待至可安全發送請求為止。
+    若目前在全域封鎖期間內則立即回傳 False（呼叫方應放棄本次請求）。
+    """
     global _last_request_time
     with _rate_lock:
         now = time.time()
+        # 全域 429 封鎖期間：直接拒絕
+        if now < _backoff_until:
+            remaining = int(_backoff_until - now)
+            print(f"[arXiv] 封鎖中，還需等待 {remaining}s（因近期 429）")
+            return False
+        # 正常速率限制
         elapsed = now - _last_request_time
         if elapsed < _MIN_INTERVAL:
             time.sleep(_MIN_INTERVAL - elapsed)
         _last_request_time = time.time()
+        return True
+
+
+def _trigger_backoff():
+    """收到 429 時呼叫，設定全域封鎖時間。"""
+    global _backoff_until
+    with _rate_lock:
+        _backoff_until = time.time() + _BACKOFF_SECS
+        print(f"[arXiv] 已觸發全域封鎖 {int(_BACKOFF_SECS)}s，暫停所有 arXiv 請求")
 
 
 class ArxivAPI:
@@ -77,6 +97,9 @@ class ArxivAPI:
         Returns:
             {"abstract": str, "arxiv_id": str, "year": str, "title": str} 或 None
         """
+        if not _rate_limit_wait():
+            return None
+
         clean_title = re.sub(r'[^\w\s]', ' ', title).strip()
         params = {
             "search_query": f'ti:"{clean_title}"',
@@ -88,6 +111,9 @@ class ArxivAPI:
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = self.session.get(ARXIV_API_URL, params=params, timeout=timeout)
+                if resp.status_code == 429:
+                    _trigger_backoff()
+                    return None
                 resp.raise_for_status()
                 return self._parse_best_match(resp.text, title)
             except requests.Timeout:
@@ -145,31 +171,28 @@ class ArxivAPI:
             "sortBy": "relevance",
         }
 
-        # 模組級速率限制：確保距上次請求 ≥ 5s
-        _rate_limit_wait()
+        # 速率限制檢查：封鎖期間直接回傳空結果
+        if not _rate_limit_wait():
+            return []
 
         resp = None
-        for attempt in range(1, 4):
+        for attempt in range(1, 3):   # 最多 2 次（減少對 arXiv 的壓力）
             try:
                 resp = self.session.get(ARXIV_API_URL, params=params, timeout=timeout)
                 if resp.status_code == 429:
-                    wait = 30 * attempt   # 30s / 60s / 90s
-                    print(f"[arXiv] 429 rate limit，等待 {wait}s 後重試...")
-                    time.sleep(wait)
-                    _rate_limit_wait()
-                    resp = None
-                    continue
+                    print(f"[arXiv] 429 rate limit，觸發全域封鎖 {int(_BACKOFF_SECS)}s")
+                    _trigger_backoff()
+                    return []   # 直接放棄，不再重試
                 resp.raise_for_status()
                 break
             except requests.RequestException as e:
-                if attempt < 3:
-                    time.sleep(10 * attempt)
+                if attempt < 2:
+                    time.sleep(15)
                 else:
                     print(f"[arXiv] 關鍵字搜尋失敗：{e}")
                     return []
 
         if resp is None:
-            print("[arXiv] 關鍵字搜尋失敗：超過重試次數（rate limit）")
             return []
 
         try:
