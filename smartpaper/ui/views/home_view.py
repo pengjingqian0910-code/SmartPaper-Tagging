@@ -856,7 +856,27 @@ class HomeView:
                     return
                 top_tags = random.sample(top_candidates, min(3, len(top_candidates)))
 
-                query = " OR ".join(top_tags)
+                # 若標籤含非 ASCII 字元（中文等），透過 Gemini 翻成英文關鍵字
+                has_non_ascii = any(not t.isascii() for t in top_tags)
+                en_keywords = top_tags
+                if has_non_ascii:
+                    try:
+                        from ...api.gemini import GeminiAPI
+                        gemini = GeminiAPI()
+                        tag_list = "、".join(top_tags)
+                        prompt = (
+                            f"Translate these research topic tags to concise English keywords "
+                            f"suitable for academic search. Return ONLY a comma-separated list "
+                            f"of 3-5 English keywords, no explanation.\nTags: {tag_list}"
+                        )
+                        translated = gemini.generate_content(prompt).strip()
+                        en_keywords = [
+                            k.strip() for k in translated.split(",") if k.strip()
+                        ][:5]
+                    except Exception:
+                        en_keywords = top_tags  # 翻譯失敗則直接用原標籤
+
+                query = " ".join(en_keywords)
                 from ...api.arxiv import ArxivAPI
                 arxiv = ArxivAPI()
                 results = arxiv.search_by_keywords(query, n_results=8)
@@ -872,8 +892,9 @@ class HomeView:
                     self._arxiv_status.color = T.TEXT_M
                     return
 
+                display_tags = ', '.join(en_keywords) if has_non_ascii else ', '.join(top_tags)
                 self._arxiv_status.value = (
-                    f"根據標籤「{', '.join(top_tags)}」找到 {len(new_results)} 篇新論文："
+                    f"根據標籤「{display_tags}」找到 {len(new_results)} 篇新論文："
                 )
                 self._arxiv_status.color = T.GREEN
 
