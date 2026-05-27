@@ -136,10 +136,10 @@ class SmartPaperApp:
                 expand=True,
             ),
             width=72,
-            gradient=ft.LinearGradient(
-                begin=ft.alignment.top_center,
-                end=ft.alignment.bottom_center,
-                colors=["#ECFDF5", "#D1FAE5"],
+            gradient=ft.RadialGradient(
+                center=ft.alignment.center,
+                radius=1.4,
+                colors=["#F0FDF4", "#A7F3D0"],
             ),
             border=ft.border.only(right=ft.border.BorderSide(1.5, T.CARD_BORDER)),
         )
@@ -202,11 +202,11 @@ class SmartPaperApp:
             content=home_content,
             expand=True,
             padding=ft.padding.only(top=24, right=24, bottom=24, left=20),
-            # 漸層底色讓半透明白色卡片呈現果凍感
-            gradient=ft.LinearGradient(
-                begin=ft.alignment.top_left,
-                end=ft.alignment.bottom_right,
-                colors=["#CCFBF1", "#D1FAE5", "#A7F3D0"],
+            # 中心淡、四邊深的放射漸層，半透明卡片浮在上面呈現果凍感
+            gradient=ft.RadialGradient(
+                center=ft.alignment.center,
+                radius=1.4,
+                colors=["#F0FDF4", "#A7F3D0", "#6EE7B7"],
             ),
         )
 
