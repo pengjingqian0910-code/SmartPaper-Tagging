@@ -59,18 +59,16 @@ class SmartPaperApp:
 
         icon_ctrl = ft.Icon(
             icon_on if is_active else icon_off,
-            color=T.ACCENT if is_active else T.TEXT_M,
+            color=T.SIDEBAR_ICON_ACT if is_active else T.SIDEBAR_ICON,
             size=18,
         )
-
         label_widget = ft.Text(
             label,
             size=9,
             weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
-            color=T.ACCENT if is_active else T.TEXT_M,
+            color=T.SIDEBAR_TEXT_ACT if is_active else T.SIDEBAR_TEXT,
             text_align=ft.TextAlign.CENTER,
         )
-
         item = ft.Container(
             content=ft.Column(
                 [icon_ctrl, label_widget],
@@ -80,9 +78,8 @@ class SmartPaperApp:
             ),
             padding=ft.padding.symmetric(vertical=8, horizontal=6),
             border_radius=T.RADIUS_M,
-            bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
+            bgcolor=T.SIDEBAR_ACTIVE if is_active else ft.colors.TRANSPARENT,
             animate=T.ANIM,
-            animate_scale=T._ANIM_BOUNCE,
             tooltip=label,
         )
 
@@ -102,9 +99,9 @@ class SmartPaperApp:
             content=ft.Column(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.AUTO_AWESOME_ROUNDED, color=ft.colors.WHITE, size=16),
-                        width=34,
-                        height=34,
+                        content=ft.Icon(ft.icons.AUTO_AWESOME_ROUNDED,
+                                        color=ft.colors.WHITE, size=16),
+                        width=34, height=34,
                         border_radius=T.RADIUS_M,
                         bgcolor=T.ACCENT,
                         alignment=ft.alignment.center,
@@ -121,12 +118,12 @@ class SmartPaperApp:
             content=ft.Column(
                 [
                     logo,
-                    ft.Container(height=1, bgcolor=T.CARD_BORDER,
+                    ft.Container(height=1, bgcolor=T.SIDEBAR_BORDER,
                                  margin=ft.margin.symmetric(horizontal=T.SP3)),
                     ft.Container(height=T.SP2),
                     *self._nav_items_refs,
                     ft.Container(expand=True),
-                    ft.Container(height=1, bgcolor=T.CARD_BORDER,
+                    ft.Container(height=1, bgcolor=T.SIDEBAR_BORDER,
                                  margin=ft.margin.symmetric(horizontal=T.SP3)),
                     self._settings_btn,
                     ft.Container(height=T.SP2),
@@ -136,12 +133,8 @@ class SmartPaperApp:
                 expand=True,
             ),
             width=72,
-            gradient=ft.RadialGradient(
-                center=ft.alignment.center,
-                radius=1.4,
-                colors=["#F0FDF4", "#A7F3D0"],
-            ),
-            border=ft.border.only(right=ft.border.BorderSide(1.5, T.CARD_BORDER)),
+            bgcolor=T.SIDEBAR_BG,
+            border=ft.border.only(right=ft.border.BorderSide(1, T.SIDEBAR_BORDER)),
         )
 
     def _build_settings_btn(self) -> ft.Container:
@@ -150,19 +143,18 @@ class SmartPaperApp:
             content=ft.Column([
                 ft.Icon(
                     ft.icons.SETTINGS if is_active else ft.icons.SETTINGS_OUTLINED,
-                    color=T.ACCENT if is_active else T.TEXT_M,
+                    color=T.SIDEBAR_ICON_ACT if is_active else T.SIDEBAR_ICON,
                     size=18,
                 ),
                 ft.Text("設定", size=9,
                         weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
-                        color=T.ACCENT if is_active else T.TEXT_M,
+                        color=T.SIDEBAR_TEXT_ACT if is_active else T.SIDEBAR_TEXT,
                         text_align=ft.TextAlign.CENTER),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4, tight=True),
             padding=ft.padding.symmetric(vertical=8, horizontal=6),
             border_radius=T.RADIUS_M,
-            bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
+            bgcolor=T.SIDEBAR_ACTIVE if is_active else ft.colors.TRANSPARENT,
             animate=T.ANIM,
-            animate_scale=T._ANIM_BOUNCE,
             tooltip="設定",
         )
 
@@ -202,12 +194,7 @@ class SmartPaperApp:
             content=home_content,
             expand=True,
             padding=ft.padding.only(top=24, right=24, bottom=24, left=20),
-            # 中心淡、四邊深的放射漸層，半透明卡片浮在上面呈現果凍感
-            gradient=ft.RadialGradient(
-                center=ft.alignment.center,
-                radius=1.4,
-                colors=["#F0FDF4", "#A7F3D0", "#6EE7B7"],
-            ),
+            bgcolor=T.PAGE_BG,
         )
 
         self._sidebar = self._build_sidebar()

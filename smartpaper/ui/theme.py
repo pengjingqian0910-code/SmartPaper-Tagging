@@ -1,51 +1,58 @@
 """
 SmartPaper Design System
-風格：果凍透明感 · 綠色主色 · 彈跳動畫
+參考：Linear（暗色 sidebar）/ Stripe（按鈕配色）/ Vercel（卡片版面）
 """
-import time
-import threading
 import flet as ft
 
-# ── Color tokens ──────────────────────────────────────────────────────
+# ── Palette ───────────────────────────────────────────────────────────
 
-# Backgrounds
-PAGE_BG    = "#D1FAE5"   # emerald-100，飽和底色讓透明感更明顯
-SIDEBAR_BG = "#ECFDF5"   # emerald-50，sidebar 輕透綠
+# Content area — Vercel / Stripe 的極淺灰底
+PAGE_BG = "#F5F5F5"
 
-# Glass card — 半透明白，疊在綠底色上呈現果凍感
-CARD_BG      = "#E8FFFFFF"   # ~91% 透明白
-CARD_BORDER  = "#34D399"     # emerald-400，鮮明邊框
-CARD_SHADOW  = "#3310B981"   # 20% emerald 綠色光暈
+# Sidebar — Linear 的深色側欄
+SIDEBAR_BG       = "#111827"   # gray-900
+SIDEBAR_BORDER   = "#1F2937"   # gray-800
+SIDEBAR_ICON     = "#6B7280"   # gray-500  (inactive)
+SIDEBAR_ICON_ACT = "#FFFFFF"   # white     (active)
+SIDEBAR_TEXT     = "#9CA3AF"   # gray-400  (inactive)
+SIDEBAR_TEXT_ACT = "#FFFFFF"   # white     (active)
+SIDEBAR_ACTIVE   = "#1D4ED8"   # blue-700 pill  (Linear 風格)
+SIDEBAR_HOVER    = "#1F2937"   # gray-800
 
-# Typography — zinc 灰保持可讀性
-TEXT_H = "#18181B"
-TEXT_B = "#3F3F46"
-TEXT_M = "#52525B"
-TEXT_D = "#A1A1AA"
+# Cards — 純白、細邊框、淺陰影（Vercel 風格）
+CARD_BG     = "#FFFFFF"
+CARD_BORDER = "#E5E7EB"   # gray-200
+CARD_SHADOW = "#0A000000" # 4% black
 
-# Primary accent — emerald
-ACCENT      = "#10B981"
-ACCENT_SOFT = "#D1FAE5"
-ACCENT_DARK = "#059669"
+# Typography — gray scale，不用純黑
+TEXT_H = "#111827"   # gray-900
+TEXT_B = "#374151"   # gray-700
+TEXT_M = "#6B7280"   # gray-500
+TEXT_D = "#9CA3AF"   # gray-400
+
+# Primary accent — Stripe 的 indigo-blue
+ACCENT      = "#4F46E5"   # indigo-600
+ACCENT_SOFT = "#EEF2FF"   # indigo-50
+ACCENT_DARK = "#3730A3"   # indigo-800
 
 # Semantic
-SUCCESS = "#10B981"
-DANGER  = "#EF4444"
-WARNING = "#F59E0B"
-TEAL    = "#14B8A6"
+SUCCESS = "#059669"   # emerald-600
+DANGER  = "#DC2626"   # red-600
+WARNING = "#D97706"   # amber-600
 
-# Legacy aliases
+# Legacy
 GREEN  = SUCCESS
 ROSE   = DANGER
 ORANGE = WARNING
-VIOLET = TEAL
+VIOLET = "#7C3AED"   # violet-700
+TEAL   = "#0D9488"   # teal-600
 
 # Stat palettes: (bg, accent)
 STAT_PALETTES = [
-    ("#D1FAE5", "#059669"),
-    ("#CCFBF1", "#0D9488"),
-    ("#D1FAE5", "#10B981"),
-    ("#F0FDF4", "#16A34A"),
+    ("#EEF2FF", "#4F46E5"),
+    ("#F0FDF4", "#059669"),
+    ("#FEF3C7", "#D97706"),
+    ("#F5F3FF", "#7C3AED"),
 ]
 
 # ── Spacing (8px grid) ───────────────────────────────────────────────
@@ -53,21 +60,18 @@ SP1 = 4;  SP2 = 8;  SP3 = 12;  SP4 = 16
 SP5 = 24; SP6 = 32; SP7 = 40;  SP8 = 48
 
 # ── Border radius ────────────────────────────────────────────────────
-RADIUS_S  = 8
-RADIUS_M  = 12
-RADIUS_L  = 16
-RADIUS_XL = 22
+RADIUS_S  = 6
+RADIUS_M  = 10
+RADIUS_L  = 14
+RADIUS_XL = 20
 
 # ── Animations ───────────────────────────────────────────────────────
-ANIM           = ft.animation.Animation(200, ft.AnimationCurve.EASE_OUT)
-ANIM_SLOW      = ft.animation.Animation(300, ft.AnimationCurve.EASE_OUT)
-# 果凍彈跳：壓縮快（80ms ease-in）→ 回彈慢（500ms elastic-out）
-_ANIM_COMPRESS = ft.animation.Animation(80,  ft.AnimationCurve.EASE_IN)
-_ANIM_BOUNCE   = ft.animation.Animation(500, ft.AnimationCurve.ELASTIC_OUT)
+ANIM       = ft.animation.Animation(200, ft.AnimationCurve.EASE_OUT)
+ANIM_SLOW  = ft.animation.Animation(300, ft.AnimationCurve.EASE_OUT)
+_ANIM_BOUNCE = ft.animation.Animation(200, ft.AnimationCurve.EASE_OUT)
 
 
 def alpha(hex_color: str, opacity: float) -> str:
-    """Convert #RRGGBB + opacity (0–1) → #AARRGGBB"""
     a = int(opacity * 255)
     return f"#{a:02X}{hex_color.lstrip('#')}"
 
@@ -75,22 +79,18 @@ def alpha(hex_color: str, opacity: float) -> str:
 _alpha = alpha
 
 
-# ── Jelly bounce ─────────────────────────────────────────────────────
+# ── Press animation (subtle tactile, not cartoonish) ─────────────────
 
 def jelly_tap(container: ft.Container, page: ft.Page,
               callback=None) -> None:
-    """
-    點擊時觸發果凍彈跳動畫：壓縮 → 彈回（elastic-out）。
-    container 必須事先設定 animate_scale。
-    """
+    """輕微縮放按壓反饋，參考 iOS 的 scale 效果。"""
+    import time, threading
     def _run():
-        # ① 快速壓縮
-        container.animate_scale = _ANIM_COMPRESS
-        container.scale = ft.transform.Scale(0.92)
+        container.animate_scale = ft.animation.Animation(120, ft.AnimationCurve.EASE_IN)
+        container.scale = ft.transform.Scale(0.96)
         page.update()
-        time.sleep(0.09)
-        # ② elastic 彈回
-        container.animate_scale = _ANIM_BOUNCE
+        time.sleep(0.13)
+        container.animate_scale = ft.animation.Animation(200, ft.AnimationCurve.EASE_OUT)
         container.scale = ft.transform.Scale(1.0)
         page.update()
         if callback:
@@ -98,7 +98,7 @@ def jelly_tap(container: ft.Container, page: ft.Page,
     threading.Thread(target=_run, daemon=True).start()
 
 
-# ── Card factories ────────────────────────────────────────────────────
+# ── Card factory ─────────────────────────────────────────────────────
 
 def card(
     content,
@@ -111,34 +111,31 @@ def card(
     width=None,
     height=None,
     on_click=None,
-    page: ft.Page = None,     # 傳入 page 啟用彈跳動畫
+    page: ft.Page = None,
 ) -> ft.Container:
     container = ft.Container(
         content=content,
         padding=padding,
         border_radius=radius,
         bgcolor=bg,
-        border=ft.border.all(1.5, border_color),
+        border=ft.border.all(1, border_color),
         shadow=ft.BoxShadow(
-            blur_radius=20,
-            spread_radius=-2,
+            blur_radius=6,
+            spread_radius=0,
             color=CARD_SHADOW,
-            offset=ft.Offset(0, 6),
+            offset=ft.Offset(0, 1),
         ),
         expand=expand,
         width=width,
         height=height,
         clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-        animate_scale=_ANIM_BOUNCE,   # 預設啟用 elastic scale
     )
-
     if on_click and page:
         def _click(e, _c=container, _p=page, _cb=on_click):
             jelly_tap(_c, _p, lambda: _cb(e))
         container.on_click = _click
     elif on_click:
         container.on_click = on_click
-
     return container
 
 
@@ -152,6 +149,7 @@ def gradient_card(
     width=None,
     height=None,
 ) -> ft.Container:
+    """Hero 用深色漸層卡片（Stripe CTA 風格）"""
     return ft.Container(
         content=content,
         padding=padding,
@@ -159,13 +157,13 @@ def gradient_card(
         gradient=ft.LinearGradient(
             begin=ft.alignment.top_left,
             end=ft.alignment.bottom_right,
-            colors=colors or [ACCENT, TEAL],
+            colors=colors or ["#1E1B4B", "#312E81", "#4338CA"],
         ),
         shadow=ft.BoxShadow(
-            blur_radius=28,
+            blur_radius=24,
             spread_radius=-4,
-            color=_alpha(ACCENT, 0.35),
-            offset=ft.Offset(0, 10),
+            color=alpha("#4F46E5", 0.40),
+            offset=ft.Offset(0, 8),
         ),
         expand=expand,
         width=width,
@@ -192,7 +190,7 @@ def muted(text: str, **kwargs) -> ft.Text:
     return ft.Text(text, size=12, color=TEXT_M, **kwargs)
 
 def section_label(text: str) -> ft.Text:
-    return ft.Text(text.upper(), size=10, weight=ft.FontWeight.W_600, color=ACCENT_DARK)
+    return ft.Text(text.upper(), size=10, weight=ft.FontWeight.W_600, color=TEXT_D)
 
 
 # ── Buttons ───────────────────────────────────────────────────────────
@@ -218,9 +216,16 @@ def pill_btn(
         style=ft.ButtonStyle(
             shape=ft.RoundedRectangleBorder(radius=RADIUS_M),
             padding=ft.padding.symmetric(horizontal=SP4, vertical=10),
-            bgcolor=color if filled else _alpha(color, 0.12),
+            bgcolor={
+                ft.ControlState.DEFAULT:  color if filled else "#FFFFFF",
+                ft.ControlState.HOVERED:  alpha(color, 0.85) if filled else alpha(color, 0.06),
+                ft.ControlState.DISABLED: "#D1D5DB",
+            },
             elevation=0,
-            overlay_color=_alpha("#FFFFFF" if filled else color, 0.12),
+            side={
+                ft.ControlState.DEFAULT: ft.BorderSide(
+                    1, ft.colors.TRANSPARENT if filled else color),
+            },
         ),
     )
 
@@ -232,7 +237,7 @@ def icon_badge(icon, color: str = ACCENT, size: int = 16, bg_size: int = 36) -> 
         content=ft.Icon(icon, size=size, color=color),
         width=bg_size, height=bg_size,
         border_radius=bg_size // 2,
-        bgcolor=_alpha(color, 0.14),
+        bgcolor=alpha(color, 0.10),
         alignment=ft.alignment.center,
     )
 
@@ -242,10 +247,10 @@ def tag_chip(text: str, color: str = ACCENT) -> ft.Container:
         content=ft.Text(text, size=11, color=color, weight=ft.FontWeight.W_500),
         padding=ft.padding.symmetric(horizontal=SP3, vertical=SP1),
         border_radius=RADIUS_S,
-        bgcolor=_alpha(color, 0.12),
-        border=ft.border.all(1, _alpha(color, 0.28)),
+        bgcolor=alpha(color, 0.08),
+        border=ft.border.all(1, alpha(color, 0.20)),
     )
 
 
 def soft_divider(height: int = 1) -> ft.Container:
-    return ft.Container(height=height, bgcolor=_alpha(ACCENT, 0.25))
+    return ft.Container(height=height, bgcolor=CARD_BORDER)

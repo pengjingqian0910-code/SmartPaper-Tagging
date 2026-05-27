@@ -12,9 +12,9 @@ from ...database.sqlite_db import SQLiteDB
 from ...models import Paper
 
 _STATUS_COLOR = {
-    "unread":  ("#71717A", "#F4F4F5"),   # zinc — 未讀
-    "reading": ("#0D9488", "#CCFBF1"),   # teal — 閱讀中
-    "read":    ("#059669", "#D1FAE5"),   # emerald — 已讀
+    "unread":  ("#6B7280", "#F3F4F6"),   # gray
+    "reading": ("#4F46E5", "#EEF2FF"),   # indigo
+    "read":    ("#059669", "#F0FDF4"),   # emerald
 }
 _STATUS_LABEL = {"unread": "未讀", "reading": "閱讀中", "read": "已讀"}
 
@@ -95,17 +95,17 @@ class TimelineView:
 
         return ft.Row([
             stat_card("library_books", "總論文數",   total,
-                      "#059669", "#D1FAE5"),
+                      "#4F46E5", "#EEF2FF"),
             stat_card("star",          "加星號",
-                      len(starred),           "#D97706", "#FFFBEB"),
+                      len(starred),           "#D97706", "#FEF3C7"),
             stat_card("check_circle",  "已讀",
-                      by_status.get("read", 0),    "#059669", "#D1FAE5"),
+                      by_status.get("read", 0),    "#059669", "#F0FDF4"),
             stat_card("menu_book",     "閱讀中",
-                      by_status.get("reading", 0), "#0D9488", "#CCFBF1"),
+                      by_status.get("reading", 0), "#4F46E5", "#EEF2FF"),
             stat_card("radio_button_unchecked", "未讀",
-                      by_status.get("unread", 0),  "#71717A", "#F4F4F5"),
+                      by_status.get("unread", 0),  "#6B7280", "#F3F4F6"),
             stat_card("percent",       "完讀率",
-                      f"{read_pct}%",              "#10B981", "#EDFAF3"),
+                      f"{read_pct}%",              "#7C3AED", "#F5F3FF"),
         ], spacing=12)
 
     # ── 每月匯入長條圖 ────────────────────────────────────────────────
@@ -137,8 +137,8 @@ class TimelineView:
 
             bar_col = ft.Column(
                 [seg(read_cnt, "#059669"),
-                 seg(reading_cnt, "#0D9488"),
-                 seg(unread_cnt, "#D4D4D8")],
+                 seg(reading_cnt, "#4F46E5"),
+                 seg(unread_cnt, "#D1D5DB")],
                 spacing=1,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             )
@@ -161,11 +161,11 @@ class TimelineView:
 
         legend = ft.Row([
             ft.Container(width=8, height=8, bgcolor="#059669", border_radius=2),
-            ft.Text("已讀", size=10, color="#71717A"),
-            ft.Container(width=8, height=8, bgcolor="#0D9488", border_radius=2),
-            ft.Text("閱讀中", size=10, color="#71717A"),
-            ft.Container(width=8, height=8, bgcolor="#D4D4D8", border_radius=2),
-            ft.Text("未讀", size=10, color="#71717A"),
+            ft.Text("已讀", size=10, color="#6B7280"),
+            ft.Container(width=8, height=8, bgcolor="#4F46E5", border_radius=2),
+            ft.Text("閱讀中", size=10, color="#6B7280"),
+            ft.Container(width=8, height=8, bgcolor="#D1D5DB", border_radius=2),
+            ft.Text("未讀", size=10, color="#6B7280"),
         ], spacing=6)
 
         return ft.Container(
@@ -184,7 +184,7 @@ class TimelineView:
                 ),
             ], spacing=10),
             bgcolor="#FFFFFF",
-            border=ft.border.all(1, "#A7F3D0"),
+            border=ft.border.all(1, "#E5E7EB"),
             border_radius=12,
             padding=16,
         )
@@ -331,7 +331,7 @@ class TimelineView:
                 ft.Column(rows, spacing=20),
             ], spacing=10),
             bgcolor="#FFFFFF",
-            border=ft.border.all(1, "#A7F3D0"),
+            border=ft.border.all(1, "#E5E7EB"),
             border_radius=12,
             padding=16,
         )

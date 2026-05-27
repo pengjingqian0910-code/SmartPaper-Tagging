@@ -21,23 +21,23 @@ from ...api import semantic_scholar as ss_api
 from ...api.arxiv import ArxivAPI
 
 # ── 色彩（與 theme.py 同步，neutral palette） ───────────────────────
-BG        = "#EDFAF3"
-CARD      = "#E8FFFFFF"   # 半透明白，果凍感
-BORDER    = "#6EE7B7"   # emerald-300 果凍邊框
-BORDER_A  = "#10B981"
-TITLE_C   = "#18181B"
-AUTH_C    = "#3F3F46"
-META_C    = "#71717A"
-TAG_BG    = "#D1FAE5"   # emerald-100
-TAG_C     = "#059669"   # emerald-600
-YEAR_BG   = "#CCFBF1"   # teal-100
-YEAR_C    = "#0D9488"   # teal-600
-SRC_BG    = "#F0FDF4"
-SRC_C     = "#16A34A"
-ABST_C    = "#3F3F46"
-ACCENT    = "#10B981"
-RED       = "#EF4444"
-GREEN     = "#10B981"
+BG        = "#F5F5F5"
+CARD      = "#FFFFFF"
+BORDER    = "#E5E7EB"
+BORDER_A  = "#4F46E5"
+TITLE_C   = "#111827"
+AUTH_C    = "#374151"
+META_C    = "#6B7280"
+TAG_BG    = "#EEF2FF"
+TAG_C     = "#4338CA"
+YEAR_BG   = "#F0FDF4"
+YEAR_C    = "#059669"
+SRC_BG    = "#F5F3FF"
+SRC_C     = "#7C3AED"
+ABST_C    = "#374151"
+ACCENT    = "#4F46E5"
+RED       = "#DC2626"
+GREEN     = "#059669"
 
 
 def _chip(text: str, bg: str, color: str, size: int = 10) -> ft.Container:
