@@ -164,7 +164,6 @@ def section_label(text: str) -> ft.Text:
         size=10,
         weight=ft.FontWeight.W_600,
         color=TEXT_D,
-        letter_spacing=0.5,
     )
 
 
