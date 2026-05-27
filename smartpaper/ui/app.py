@@ -82,9 +82,14 @@ class SmartPaperApp:
             border_radius=T.RADIUS_M,
             bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
             animate=T.ANIM,
-            on_click=lambda _e, i=idx: self._on_nav_click(i),
+            animate_scale=T._ANIM_BOUNCE,
             tooltip=label,
         )
+
+        def _click(_e, i=idx, c=item):
+            T.jelly_tap(c, self.page, lambda: self._on_nav_click(i))
+
+        item.on_click = _click
         return item
 
     def _build_sidebar(self) -> ft.Container:
@@ -131,13 +136,17 @@ class SmartPaperApp:
                 expand=True,
             ),
             width=72,
-            bgcolor=T.SIDEBAR_BG,
-            border=ft.border.only(right=ft.border.BorderSide(1, T.CARD_BORDER)),
+            gradient=ft.LinearGradient(
+                begin=ft.alignment.top_center,
+                end=ft.alignment.bottom_center,
+                colors=["#ECFDF5", "#D1FAE5"],
+            ),
+            border=ft.border.only(right=ft.border.BorderSide(1.5, T.CARD_BORDER)),
         )
 
     def _build_settings_btn(self) -> ft.Container:
         is_active = self._selected == -1
-        return ft.Container(
+        btn = ft.Container(
             content=ft.Column([
                 ft.Icon(
                     ft.icons.SETTINGS if is_active else ft.icons.SETTINGS_OUTLINED,
@@ -153,9 +162,15 @@ class SmartPaperApp:
             border_radius=T.RADIUS_M,
             bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
             animate=T.ANIM,
-            on_click=self._on_settings_click,
+            animate_scale=T._ANIM_BOUNCE,
             tooltip="設定",
         )
+
+        def _click(e, c=btn):
+            T.jelly_tap(c, self.page, lambda: self._on_settings_click(e))
+
+        btn.on_click = _click
+        return btn
 
     # ── Navigation ────────────────────────────────────────────────────
 
@@ -187,6 +202,12 @@ class SmartPaperApp:
             content=home_content,
             expand=True,
             padding=ft.padding.only(top=24, right=24, bottom=24, left=20),
+            # 漸層底色讓半透明白色卡片呈現果凍感
+            gradient=ft.LinearGradient(
+                begin=ft.alignment.top_left,
+                end=ft.alignment.bottom_right,
+                colors=["#CCFBF1", "#D1FAE5", "#A7F3D0"],
+            ),
         )
 
         self._sidebar = self._build_sidebar()

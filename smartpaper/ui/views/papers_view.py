@@ -22,7 +22,7 @@ from ...api.arxiv import ArxivAPI
 
 # ── 色彩（與 theme.py 同步，neutral palette） ───────────────────────
 BG        = "#EDFAF3"
-CARD      = "#FFFFFF"
+CARD      = "#E8FFFFFF"   # 半透明白，果凍感
 BORDER    = "#6EE7B7"   # emerald-300 果凍邊框
 BORDER_A  = "#10B981"
 TITLE_C   = "#18181B"
