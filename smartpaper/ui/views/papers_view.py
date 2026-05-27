@@ -20,21 +20,21 @@ from ...models import Paper
 from ...api import semantic_scholar as ss_api
 from ...api.arxiv import ArxivAPI
 
-# ── 色彩 ──────────────────────────────────────────────────────────────
-BG        = "#F1F5F9"   # 頁面底色（淺灰藍）
+# ── 色彩（與 theme.py 同步，neutral palette） ───────────────────────
+BG        = "#F7F7F8"
 CARD      = "#FFFFFF"
-BORDER    = "#E2E8F0"
+BORDER    = "#E4E4E7"
 BORDER_A  = "#6366F1"
-TITLE_C   = "#1E293B"
-AUTH_C    = "#475569"
-META_C    = "#94A3B8"
+TITLE_C   = "#18181B"
+AUTH_C    = "#3F3F46"
+META_C    = "#71717A"
 TAG_BG    = "#EEF2FF"
 TAG_C     = "#4F46E5"
-YEAR_BG   = "#ECFDF5"
+YEAR_BG   = "#F0FDF4"
 YEAR_C    = "#059669"
-SRC_BG    = "#EFF6FF"
-SRC_C     = "#2563EB"
-ABST_C    = "#64748B"
+SRC_BG    = "#F5F3FF"
+SRC_C     = "#7C3AED"
+ABST_C    = "#3F3F46"
 ACCENT    = "#6366F1"
 RED       = "#EF4444"
 GREEN     = "#10B981"

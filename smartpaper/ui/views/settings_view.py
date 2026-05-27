@@ -20,20 +20,19 @@ from ...database.sqlite_db import SQLiteDB
 
 
 def _card(title: str, icon: str, icon_color: str,
-          content: ft.Control, border_color: str = "#E2E8F0") -> ft.Container:
+          content: ft.Control, border_color: str = "#E4E4E7") -> ft.Container:
     return ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(icon, color=icon_color, size=16),
-                ft.Text(title, size=13, weight=ft.FontWeight.W_600, color=icon_color),
-            ], spacing=8),
-            ft.Divider(height=6, color=border_color),
+            ft.Text(title, size=13, weight=ft.FontWeight.W_600, color="#18181B"),
+            ft.Container(height=1, bgcolor="#E4E4E7"),
             content,
-        ], spacing=10),
+        ], spacing=12),
         bgcolor="#FFFFFF",
-        border=ft.border.all(1, border_color),
-        border_radius=12,
-        padding=18,
+        border=ft.border.all(1, "#E4E4E7"),
+        border_radius=10,
+        padding=20,
+        shadow=ft.BoxShadow(blur_radius=8, spread_radius=0,
+                             color="#09000000", offset=ft.Offset(0, 2)),
     )
 
 

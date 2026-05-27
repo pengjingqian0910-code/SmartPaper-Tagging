@@ -57,23 +57,15 @@ class SmartPaperApp:
     def _build_nav_item(self, idx: int, icon_on, icon_off, label: str) -> ft.Container:
         is_active = idx == self._selected
 
-        indicator = ft.Container(
-            content=ft.Icon(
-                icon_on if is_active else icon_off,
-                color=T.ACCENT if is_active else T.TEXT_M,
-                size=20,
-            ),
-            width=46,
-            height=40,
-            border_radius=12,
-            bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
-            alignment=ft.alignment.center,
-            animate=ft.animation.Animation(200, ft.AnimationCurve.EASE_OUT),
+        icon_ctrl = ft.Icon(
+            icon_on if is_active else icon_off,
+            color=T.ACCENT if is_active else T.TEXT_M,
+            size=18,
         )
 
         label_widget = ft.Text(
             label,
-            size=10,
+            size=9,
             weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
             color=T.ACCENT if is_active else T.TEXT_M,
             text_align=ft.TextAlign.CENTER,
@@ -81,13 +73,15 @@ class SmartPaperApp:
 
         item = ft.Container(
             content=ft.Column(
-                [indicator, label_widget],
+                [icon_ctrl, label_widget],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=3,
+                spacing=4,
                 tight=True,
             ),
-            padding=ft.padding.symmetric(vertical=6, horizontal=8),
-            border_radius=14,
+            padding=ft.padding.symmetric(vertical=8, horizontal=6),
+            border_radius=T.RADIUS_M,
+            bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
+            animate=T.ANIM,
             on_click=lambda _e, i=idx: self._on_nav_click(i),
             tooltip=label,
         )
@@ -103,22 +97,17 @@ class SmartPaperApp:
             content=ft.Column(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.AUTO_AWESOME_ROUNDED, color=ft.colors.WHITE, size=18),
-                        width=38,
-                        height=38,
-                        border_radius=12,
+                        content=ft.Icon(ft.icons.AUTO_AWESOME_ROUNDED, color=ft.colors.WHITE, size=16),
+                        width=34,
+                        height=34,
+                        border_radius=T.RADIUS_M,
                         bgcolor=T.ACCENT,
                         alignment=ft.alignment.center,
-                        shadow=ft.BoxShadow(
-                            blur_radius=12,
-                            color="#4D6366F1",   # 30% ACCENT
-                            offset=ft.Offset(0, 4),
-                        ),
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(vertical=16),
+            padding=ft.padding.symmetric(vertical=T.SP4),
         )
 
         self._settings_btn = self._build_settings_btn()
@@ -127,50 +116,43 @@ class SmartPaperApp:
             content=ft.Column(
                 [
                     logo,
-                    ft.Container(height=1, bgcolor=T.CARD_BORDER, margin=ft.margin.symmetric(horizontal=12)),
-                    ft.Container(height=8),
+                    ft.Container(height=1, bgcolor=T.CARD_BORDER,
+                                 margin=ft.margin.symmetric(horizontal=T.SP3)),
+                    ft.Container(height=T.SP2),
                     *self._nav_items_refs,
-                    ft.Container(expand=True),  # spacer
-                    ft.Container(height=1, bgcolor=T.CARD_BORDER, margin=ft.margin.symmetric(horizontal=12)),
+                    ft.Container(expand=True),
+                    ft.Container(height=1, bgcolor=T.CARD_BORDER,
+                                 margin=ft.margin.symmetric(horizontal=T.SP3)),
                     self._settings_btn,
-                    ft.Container(height=6),
+                    ft.Container(height=T.SP2),
                 ],
                 spacing=2,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 expand=True,
             ),
-            width=76,
+            width=72,
             bgcolor=T.SIDEBAR_BG,
             border=ft.border.only(right=ft.border.BorderSide(1, T.CARD_BORDER)),
-            shadow=ft.BoxShadow(
-                blur_radius=20,
-                spread_radius=-4,
-                color="#0F000000",   # 6% black
-                offset=ft.Offset(4, 0),
-            ),
         )
 
     def _build_settings_btn(self) -> ft.Container:
-        is_active = self._selected == -1  # -1 = settings
+        is_active = self._selected == -1
         return ft.Container(
             content=ft.Column([
-                ft.Container(
-                    content=ft.Icon(
-                        ft.icons.SETTINGS if is_active else ft.icons.SETTINGS_OUTLINED,
-                        color=T.ACCENT if is_active else T.TEXT_M,
-                        size=20,
-                    ),
-                    width=46, height=40, border_radius=12,
-                    bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
-                    alignment=ft.alignment.center,
+                ft.Icon(
+                    ft.icons.SETTINGS if is_active else ft.icons.SETTINGS_OUTLINED,
+                    color=T.ACCENT if is_active else T.TEXT_M,
+                    size=18,
                 ),
-                ft.Text("設定", size=10,
+                ft.Text("設定", size=9,
                         weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
                         color=T.ACCENT if is_active else T.TEXT_M,
                         text_align=ft.TextAlign.CENTER),
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=3, tight=True),
-            padding=ft.padding.symmetric(vertical=6, horizontal=8),
-            border_radius=14,
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4, tight=True),
+            padding=ft.padding.symmetric(vertical=8, horizontal=6),
+            border_radius=T.RADIUS_M,
+            bgcolor=T.ACCENT_SOFT if is_active else ft.colors.TRANSPARENT,
+            animate=T.ANIM,
             on_click=self._on_settings_click,
             tooltip="設定",
         )

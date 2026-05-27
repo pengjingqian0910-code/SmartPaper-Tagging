@@ -198,29 +198,35 @@ class HomeView:
 
     def _build_quick_guide_card(self) -> ft.Container:
         steps = [
-            ("upload_file",    "選擇 XLSX / CSV 檔案"),
-            ("table_chart",    "對應欄位（標題、摘要）"),
-            ("rocket_launch",  "點擊開始處理"),
-            ("auto_awesome",   "AI 自動生成標籤"),
+            "選擇 XLSX / CSV 檔案",
+            "對應欄位（標題、摘要）",
+            "點擊開始處理",
+            "AI 自動生成標籤",
         ]
         return T.card(
             ft.Column(
                 [
                     T.section_label("快速入門"),
-                    ft.Container(height=8),
+                    ft.Container(height=T.SP2),
                     *[
                         ft.Row([
-                            T.icon_badge(icon, T.ACCENT, size=13, bg_size=28),
+                            ft.Container(
+                                content=ft.Text(str(i + 1), size=10,
+                                                color=T.ACCENT, weight=ft.FontWeight.W_600),
+                                width=20, height=20, border_radius=10,
+                                bgcolor=T.ACCENT_SOFT,
+                                alignment=ft.alignment.center,
+                            ),
                             ft.Text(text, size=12, color=T.TEXT_B),
-                        ], spacing=10)
-                        for icon, text in steps
+                        ], spacing=T.SP2)
+                        for i, text in enumerate(steps)
                     ],
                 ],
-                spacing=8,
+                spacing=T.SP2,
             ),
             expand=2,
             height=160,
-            padding=20,
+            padding=T.SP4,
         )
 
     # ── Stats row ─────────────────────────────────────────────────────
@@ -242,28 +248,16 @@ class HomeView:
         return T.card(
             ft.Column(
                 [
-                    ft.Row([
-                        T.icon_badge(icon, accent, size=16, bg_size=36),
-                        ft.Container(expand=True),
-                        ft.Container(
-                            content=ft.Text("↑", size=10, color=accent),
-                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
-                            border_radius=6,
-                            bgcolor=T.alpha(accent, 0.12),
-                        ),
-                    ]),
-                    ft.Container(height=8),
-                    ft.Text(str(value), size=30, weight=ft.FontWeight.BOLD, color=T.TEXT_H),
-                    ft.Text(label, size=12, color=T.TEXT_M),
+                    ft.Text(label, size=11, color=T.TEXT_M),
+                    ft.Container(height=T.SP2),
+                    ft.Text(str(value), size=28, weight=ft.FontWeight.BOLD, color=T.TEXT_H),
                 ],
                 spacing=0,
             ),
-            bg=bg,
-            border_color=T.alpha(accent, 0.30),
-            shadow_color=T.alpha(accent, 0.08),
-            padding=20,
+            bg=T.CARD_BG,
+            padding=T.SP4,
             expand=True,
-            height=130,
+            height=100,
         )
 
     # ── Upload card ───────────────────────────────────────────────────
@@ -272,10 +266,7 @@ class HomeView:
         return T.card(
             ft.Column(
                 [
-                    ft.Row([
-                        T.icon_badge("upload_file", T.ACCENT, size=16, bg_size=36),
-                        T.h3("匯入論文清單"),
-                    ], spacing=12),
+                    T.h3("匯入論文清單"),
                     T.soft_divider(),
                     ft.Row(
                         [
@@ -497,10 +488,7 @@ class HomeView:
 
         return T.card(
             ft.Column([
-                ft.Row([
-                    T.icon_badge("bolt", T.VIOLET, size=16, bg_size=36),
-                    T.h3("快速匯入（DOI / arXiv）"),
-                ], spacing=12),
+                T.h3("快速匯入（DOI / arXiv）"),
                 T.soft_divider(),
                 ft.Text(
                     "直接貼上 DOI 或 arXiv 連結，自動取得標題、作者、摘要並生成標籤",
@@ -576,17 +564,16 @@ class HomeView:
         # 拖曳區（視覺化 drop zone — 點擊開啟 FilePicker）
         drop_zone = ft.Container(
             content=ft.Column([
-                ft.Icon("cloud_upload", size=32, color="#94A3B8"),
-                ft.Text("點擊選擇 PDF 或拖曳至此", size=12, color="#94A3B8",
+                ft.Text("點擊選擇 PDF 或拖曳至此", size=12, color=T.TEXT_M,
                         text_align=ft.TextAlign.CENTER),
-                ft.Text("支援 .pdf 格式，可多選", size=10, color="#CBD5E1",
+                ft.Text("支援 .pdf 格式，可多選", size=10, color=T.TEXT_D,
                         text_align=ft.TextAlign.CENTER),
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=T.SP1),
             width=float("inf"),
-            height=90,
-            border=ft.border.all(2, "#CBD5E1"),
-            border_radius=12,
-            bgcolor="#F8FAFC",
+            height=72,
+            border=ft.border.all(1, T.CARD_BORDER),
+            border_radius=T.RADIUS_M,
+            bgcolor=T.PAGE_BG,
             alignment=ft.alignment.center,
             on_click=self._on_pick_pdfs,
             ink=True,
@@ -595,10 +582,7 @@ class HomeView:
 
         return T.card(
             ft.Column([
-                ft.Row([
-                    T.icon_badge("picture_as_pdf", "#C62828", size=16, bg_size=36),
-                    T.h3("上傳 PDF 全文"),
-                ], spacing=12),
+                T.h3("上傳 PDF 全文"),
                 T.soft_divider(),
                 ft.Text(
                     "上傳 PDF 後可用「問論文」功能進行章節級精準問答",
@@ -817,11 +801,10 @@ class HomeView:
         return T.card(
             ft.Column([
                 ft.Row([
-                    T.icon_badge("rss_feed", "#B45309", size=16, bg_size=36),
-                    T.h3("arXiv 每日推薦"),
+                    T.h3("arXiv 推薦"),
                     ft.Container(expand=True),
                     self._arxiv_btn,
-                ], spacing=12),
+                ], spacing=T.SP3),
                 T.soft_divider(),
                 ft.Text("根據你的文獻庫標籤，從 arXiv 找最新相關論文",
                         size=12, color=T.TEXT_M),

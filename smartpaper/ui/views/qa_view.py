@@ -21,13 +21,13 @@ from ...config import GEMINI_API_KEY
 
 MAX_SESSIONS = 5
 
-COLOR_USER_BG       = "#E3F2FD"
-COLOR_ASST_BG       = "#F3E5F5"
-COLOR_SOURCE_BG     = "#FAFAFA"
-COLOR_BORDER        = "#E0E0E0"
-COLOR_FULLTEXT_BADGE = "#1B5E20"
-COLOR_ABSTRACT_BADGE = "#1565C0"
-COLOR_TABLE_BADGE   = "#E65100"
+COLOR_USER_BG        = "#EEF2FF"   # indigo-50, matches accent
+COLOR_ASST_BG        = "#F7F7F8"   # zinc-50, neutral
+COLOR_SOURCE_BG      = "#FAFAFA"
+COLOR_BORDER         = "#E4E4E7"   # zinc-200
+COLOR_FULLTEXT_BADGE = "#065F46"   # emerald-900
+COLOR_ABSTRACT_BADGE = "#3730A3"   # indigo-800
+COLOR_TABLE_BADGE    = "#92400E"   # amber-800
 
 _SIDEBAR_W = 340
 

@@ -12,9 +12,9 @@ from ...database.sqlite_db import SQLiteDB
 from ...models import Paper
 
 _STATUS_COLOR = {
-    "unread":  ("#6366F1", "#EEF2FF"),
-    "reading": ("#0369A1", "#DBEAFE"),
-    "read":    ("#059669", "#DCFCE7"),
+    "unread":  ("#71717A", "#F4F4F5"),   # zinc — neutral / not started
+    "reading": ("#6366F1", "#EEF2FF"),   # indigo — in progress
+    "read":    ("#059669", "#F0FDF4"),   # emerald — done
 }
 _STATUS_LABEL = {"unread": "未讀", "reading": "閱讀中", "read": "已讀"}
 
@@ -59,7 +59,7 @@ class TimelineView:
                             size=11, color=ft.colors.GREY_600),
                 ], spacing=2, expand=True),
             ]),
-            ft.Divider(height=1, color="#E2E8F0"),
+            ft.Divider(height=1, color="#E4E4E7"),
             ft.Column([
                 self._build_stats_row(total, by_status, starred),
                 self._build_bar_chart(by_month, sorted_months),
@@ -95,17 +95,17 @@ class TimelineView:
 
         return ft.Row([
             stat_card("library_books", "總論文數",   total,
-                      "#6366F1", "#EEF2FF"),
+                      "#3F3F46", "#F4F4F5"),
             stat_card("star",          "加星號",
-                      len(starred),           "#D97706", "#FEF3C7"),
+                      len(starred),           "#D97706", "#FFFBEB"),
             stat_card("check_circle",  "已讀",
-                      by_status.get("read", 0),    "#059669", "#DCFCE7"),
+                      by_status.get("read", 0),    "#059669", "#F0FDF4"),
             stat_card("menu_book",     "閱讀中",
-                      by_status.get("reading", 0), "#0369A1", "#DBEAFE"),
+                      by_status.get("reading", 0), "#6366F1", "#EEF2FF"),
             stat_card("radio_button_unchecked", "未讀",
-                      by_status.get("unread", 0),  "#94A3B8", "#F8FAFC"),
+                      by_status.get("unread", 0),  "#71717A", "#F7F7F8"),
             stat_card("percent",       "完讀率",
-                      f"{read_pct}%",              "#7C3AED", "#F5F3FF"),
+                      f"{read_pct}%",              "#18181B", "#F7F7F8"),
         ], spacing=12)
 
     # ── 每月匯入長條圖 ────────────────────────────────────────────────
@@ -137,8 +137,8 @@ class TimelineView:
 
             bar_col = ft.Column(
                 [seg(read_cnt, "#059669"),
-                 seg(reading_cnt, "#0369A1"),
-                 seg(unread_cnt, "#CBD5E1")],
+                 seg(reading_cnt, "#6366F1"),
+                 seg(unread_cnt, "#D4D4D8")],
                 spacing=1,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             )
@@ -154,30 +154,29 @@ class TimelineView:
                     clip_behavior=ft.ClipBehavior.HARD_EDGE,
                 ),
                 ft.Text(month[5:],  # "MM"
-                        size=9, color="#94A3B8",
+                        size=9, color="#71717A",
                         text_align=ft.TextAlign.CENTER),
             ], spacing=3,
                horizontal_alignment=ft.CrossAxisAlignment.CENTER))
 
         legend = ft.Row([
-            ft.Container(width=10, height=10, bgcolor="#059669", border_radius=3),
-            ft.Text("已讀", size=10, color="#475569"),
-            ft.Container(width=10, height=10, bgcolor="#0369A1", border_radius=3),
-            ft.Text("閱讀中", size=10, color="#475569"),
-            ft.Container(width=10, height=10, bgcolor="#CBD5E1", border_radius=3),
-            ft.Text("未讀", size=10, color="#475569"),
+            ft.Container(width=8, height=8, bgcolor="#059669", border_radius=2),
+            ft.Text("已讀", size=10, color="#71717A"),
+            ft.Container(width=8, height=8, bgcolor="#6366F1", border_radius=2),
+            ft.Text("閱讀中", size=10, color="#71717A"),
+            ft.Container(width=8, height=8, bgcolor="#D4D4D8", border_radius=2),
+            ft.Text("未讀", size=10, color="#71717A"),
         ], spacing=6)
 
         return ft.Container(
             content=ft.Column([
                 ft.Row([
-                    ft.Icon("bar_chart", color="#6366F1", size=16),
-                    ft.Text("每月匯入論文數", size=13,
-                            weight=ft.FontWeight.W_600, color="#6366F1"),
+                    ft.Text("每月匯入", size=13,
+                            weight=ft.FontWeight.W_600, color="#18181B"),
                     ft.Container(expand=True),
                     legend,
                 ], spacing=8),
-                ft.Divider(height=4, color="#E2E8F0"),
+                ft.Divider(height=4, color="#E4E4E7"),
                 ft.Row(
                     bars, spacing=4,
                     scroll=ft.ScrollMode.AUTO,
@@ -185,7 +184,7 @@ class TimelineView:
                 ),
             ], spacing=10),
             bgcolor="#FFFFFF",
-            border=ft.border.all(1, "#E2E8F0"),
+            border=ft.border.all(1, "#E4E4E7"),
             border_radius=12,
             padding=16,
         )
@@ -198,7 +197,7 @@ class TimelineView:
                 content=ft.Row([
                     ft.Icon("star_border", color="#CBD5E1", size=16),
                     ft.Text("尚無加星號的論文。在論文管理頁點擊 ⭐ 星號即可標記重要論文。",
-                            size=12, color="#94A3B8", italic=True),
+                            size=12, color="#71717A", italic=True),
                 ], spacing=8),
                 bgcolor="#FFFBEB",
                 border=ft.border.all(1, "#FDE68A"),
@@ -209,7 +208,7 @@ class TimelineView:
         cards = []
         for p in starred[:12]:
             status_color, status_bg = _STATUS_COLOR.get(
-                p.read_status, ("#94A3B8", "#F8FAFC"))
+                p.read_status, ("#71717A", "#F7F7F8"))
             auth = (p.authors[0] + (" et al." if len(p.authors) > 1 else "")
                     ) if p.authors else "作者不詳"
             cards.append(ft.Container(
@@ -217,13 +216,13 @@ class TimelineView:
                     ft.Row([
                         ft.Icon("star", color="#F59E0B", size=13),
                         ft.Text(p.title, size=12, weight=ft.FontWeight.W_600,
-                                color="#1E293B", expand=True,
+                                color="#18181B", expand=True,
                                 max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
                     ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.START),
                     ft.Row([
-                        ft.Text(auth, size=10, color="#64748B"),
+                        ft.Text(auth, size=10, color="#3F3F46"),
                         ft.Text(str(p.year) if p.year else "", size=10,
-                                color="#94A3B8"),
+                                color="#71717A"),
                         _chip(_STATUS_LABEL.get(p.read_status, "未讀"),
                               status_bg, status_color),
                     ], spacing=6),
@@ -259,7 +258,7 @@ class TimelineView:
     def _build_timeline(self, by_month: dict, sorted_months: list) -> ft.Container:
         if not sorted_months:
             return ft.Container(
-                content=ft.Text("尚無論文資料", size=13, color="#94A3B8"),
+                content=ft.Text("尚無論文資料", size=13, color="#71717A"),
                 padding=20,
             )
 
@@ -270,7 +269,7 @@ class TimelineView:
             month_items = []
             for p in papers:
                 status_color, status_bg = _STATUS_COLOR.get(
-                    p.read_status, ("#94A3B8", "#F8FAFC"))
+                    p.read_status, ("#71717A", "#F7F7F8"))
                 auth = (p.authors[0] + (" et al." if len(p.authors) > 1 else "")
                         ) if p.authors else "作者不詳"
                 note_row = []
@@ -285,10 +284,10 @@ class TimelineView:
                     content=ft.Column([
                         ft.Row([
                             ft.Icon("star" if p.starred else "article",
-                                    color="#F59E0B" if p.starred else "#94A3B8",
+                                    color="#F59E0B" if p.starred else "#71717A",
                                     size=13),
                             ft.Text(p.title, size=12,
-                                    weight=ft.FontWeight.W_600, color="#1E293B",
+                                    weight=ft.FontWeight.W_600, color="#18181B",
                                     expand=True, max_lines=1,
                                     overflow=ft.TextOverflow.ELLIPSIS),
                             _chip(_STATUS_LABEL.get(p.read_status, "未讀"),
@@ -296,9 +295,9 @@ class TimelineView:
                         ], spacing=6,
                            vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         ft.Row([
-                            ft.Text(auth, size=10, color="#64748B"),
+                            ft.Text(auth, size=10, color="#3F3F46"),
                             ft.Text(str(p.year) if p.year else "",
-                                    size=10, color="#94A3B8"),
+                                    size=10, color="#71717A"),
                             *[ft.Container(
                                 content=ft.Text(t, size=9, color="#4F46E5"),
                                 bgcolor="#EEF2FF", border_radius=50,
@@ -316,17 +315,10 @@ class TimelineView:
             rows.append(ft.Column([
                 ft.Container(
                     content=ft.Row([
-                        ft.Container(
-                            content=ft.Text(month, size=12,
-                                            weight=ft.FontWeight.W_700,
-                                            color="#FFFFFF"),
-                            bgcolor="#6366F1",
-                            border_radius=50,
-                            padding=ft.padding.symmetric(horizontal=12, vertical=4),
-                        ),
-                        ft.Text(f"共 {len(papers)} 篇", size=11,
-                                color="#94A3B8"),
-                    ], spacing=8),
+                        ft.Text(month, size=12, weight=ft.FontWeight.W_700,
+                                color="#18181B"),
+                        ft.Text(f"· {len(papers)} 篇", size=11, color="#71717A"),
+                    ], spacing=6),
                     padding=ft.padding.only(bottom=4),
                 ),
                 ft.Column(month_items, spacing=6),
@@ -334,16 +326,12 @@ class TimelineView:
 
         return ft.Container(
             content=ft.Column([
-                ft.Row([
-                    ft.Icon("timeline", color="#6366F1", size=16),
-                    ft.Text("時間線", size=13,
-                            weight=ft.FontWeight.W_600, color="#6366F1"),
-                ], spacing=8),
-                ft.Divider(height=4, color="#E2E8F0"),
+                ft.Text("時間線", size=13, weight=ft.FontWeight.W_600, color="#18181B"),
+                ft.Divider(height=4, color="#E4E4E7"),
                 ft.Column(rows, spacing=20),
             ], spacing=10),
             bgcolor="#FFFFFF",
-            border=ft.border.all(1, "#E2E8F0"),
+            border=ft.border.all(1, "#E4E4E7"),
             border_radius=12,
             padding=16,
         )
