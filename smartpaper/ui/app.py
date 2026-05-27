@@ -43,11 +43,8 @@ class SmartPaperApp:
         self.setup_navigation()
 
     def setup_page(self):
-        self.page.title = "SmartPaper"
-        self.page.window.width = 1280
-        self.page.window.height = 820
-        self.page.window.min_width = 900
-        self.page.window.min_height = 600
+        # 基本視窗設定已在 main() 的 splash 階段完成；
+        # 這裡只補充尚未設定的屬性即可
         self.page.padding = 0
         self.page.bgcolor = T.PAGE_BG
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -305,14 +302,90 @@ class ModelPrewarmer:
         pass  # overlay removed; prewarming runs silently in background
 
 
+def _build_splash(status_text: ft.Text, progress: ft.ProgressBar) -> ft.Container:
+    """啟動載入畫面 — 深色背景，與 sidebar 同色調"""
+    return ft.Container(
+        content=ft.Column(
+            [
+                ft.Container(
+                    content=ft.Icon(ft.icons.AUTO_AWESOME_ROUNDED,
+                                    color=ft.colors.WHITE, size=22),
+                    width=48, height=48, border_radius=14,
+                    bgcolor="#4F46E5",
+                    alignment=ft.alignment.center,
+                ),
+                ft.Container(height=20),
+                ft.Text("SmartPaper", size=26, weight=ft.FontWeight.BOLD,
+                        color="#FFFFFF"),
+                ft.Text("智能學術文獻管理", size=13, color="#6B7280"),
+                ft.Container(height=36),
+                progress,
+                ft.Container(height=10),
+                status_text,
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            tight=True,
+        ),
+        expand=True,
+        alignment=ft.alignment.center,
+        bgcolor="#111827",
+    )
+
+
 def main(page: ft.Page):
     """應用程式入口函數"""
-    # 啟動本地 API server（供 Bookmarklet 呼叫，port 7878）
-    from ..services.api_server import start as start_api
-    start_api()
+    # ── 立即設定視窗並顯示 Splash（讓使用者看到畫面，不再黑屏）──
+    page.title = "SmartPaper"
+    page.window.width = 1280
+    page.window.height = 820
+    page.window.min_width = 900
+    page.window.min_height = 600
+    page.padding = 0
+    page.bgcolor = "#111827"
+    page.theme_mode = ft.ThemeMode.LIGHT
 
-    SmartPaperApp(page)
-    ModelPrewarmer(page).start()
+    status_text = ft.Text("正在啟動…", size=12, color="#6B7280")
+    progress = ft.ProgressBar(
+        width=220, color="#4F46E5", bgcolor="#1F2937",
+        border_radius=4, value=None,   # indeterminate
+    )
+    splash = _build_splash(status_text, progress)
+    page.add(splash)
+    page.update()
+
+    # ── 其餘初始化移進背景執行緒，避免 UI 凍結 ──────────────────
+    def _init():
+        def _status(msg: str):
+            status_text.value = msg
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        _status("啟動 API 服務…")
+        try:
+            from ..services.api_server import start as start_api
+            start_api()
+        except Exception:
+            pass
+
+        _status("載入介面元件…")
+        try:
+            # SmartPaperApp 會呼叫 page.add()，加在 splash 之後
+            SmartPaperApp(page)
+            # 移除 splash（index 0），保留 SmartPaperApp 加入的 Row
+            if page.controls and page.controls[0] is splash:
+                page.controls.pop(0)
+            page.bgcolor = "#F5F5F5"
+            page.update()
+        except Exception as e:
+            status_text.value = f"❌ 載入失敗：{e}"
+            page.update()
+            return
+
+        ModelPrewarmer(page).start()
+
+    threading.Thread(target=_init, daemon=True).start()
 
 
 if __name__ == "__main__":
