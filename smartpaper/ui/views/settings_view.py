@@ -20,15 +20,15 @@ from ...database.sqlite_db import SQLiteDB
 
 
 def _card(title: str, icon: str, icon_color: str,
-          content: ft.Control, border_color: str = "#E4E4E7") -> ft.Container:
+          content: ft.Control, border_color: str = "#A7F3D0") -> ft.Container:
     return ft.Container(
         content=ft.Column([
             ft.Text(title, size=13, weight=ft.FontWeight.W_600, color="#18181B"),
-            ft.Container(height=1, bgcolor="#E4E4E7"),
+            ft.Container(height=1, bgcolor="#A7F3D0"),
             content,
         ], spacing=12),
         bgcolor="#FFFFFF",
-        border=ft.border.all(1, "#E4E4E7"),
+        border=ft.border.all(1, "#A7F3D0"),
         border_radius=10,
         padding=20,
         shadow=ft.BoxShadow(blur_radius=8, spread_radius=0,
@@ -52,7 +52,7 @@ class SettingsView:
                             size=11, color=ft.colors.GREY_600),
                 ], spacing=2),
             ]),
-            ft.Divider(height=1, color="#E2E8F0"),
+            ft.Divider(height=1, color="#A7F3D0"),
             ft.Column([
                 self._build_profile_card(),
                 self._build_api_key_card(),

@@ -1,48 +1,51 @@
 """
 SmartPaper Design System
-風格：Linear / Vercel / Stripe — clean, neutral, typography-first
+風格：果凍透明感 · 綠色主色 · 清爽有質感
 """
 import flet as ft
 
 # ── Color tokens ──────────────────────────────────────────────────────
-# Background layers
-PAGE_BG    = "#F7F7F8"   # zinc-50, neutral (not blue-tinted)
-SIDEBAR_BG = "#FFFFFF"
+
+# Backgrounds — 帶淡綠調的底色，呈現果凍感
+PAGE_BG    = "#EDFAF3"   # 淡翠綠底色
+SIDEBAR_BG = "#F5FDF8"   # sidebar 帶一絲綠調的白
 
 # Surface
 CARD_BG     = "#FFFFFF"
-CARD_BORDER = "#E4E4E7"   # zinc-200, neutral
-CARD_SHADOW = "#09000000" # 3.5% black, barely-there
+CARD_BORDER = "#6EE7B7"   # emerald-300：鮮明邊框，果凍感關鍵
+CARD_SHADOW = "#2010B981" # 12% emerald，綠色光暈
 
-# Typography — zinc scale
-TEXT_H = "#18181B"   # zinc-900, headings
-TEXT_B = "#3F3F46"   # zinc-700, body
-TEXT_M = "#71717A"   # zinc-500, muted / meta
-TEXT_D = "#A1A1AA"   # zinc-400, disabled / placeholder
+# Typography — 保持中性 zinc，確保可讀性
+TEXT_H = "#18181B"   # zinc-900
+TEXT_B = "#3F3F46"   # zinc-700
+TEXT_M = "#71717A"   # zinc-500
+TEXT_D = "#A1A1AA"   # zinc-400
 
-# Primary accent — indigo (ONE accent color, used sparingly)
-ACCENT      = "#6366F1"
-ACCENT_SOFT = "#EEF2FF"
-ACCENT_DARK = "#4F46E5"
+# Primary accent — emerald 綠
+ACCENT      = "#10B981"   # emerald-500
+ACCENT_SOFT = "#D1FAE5"   # emerald-100
+ACCENT_DARK = "#059669"   # emerald-600
 
-# Semantic — only for status indicators, not decoration
-SUCCESS = "#10B981"   # emerald
-DANGER  = "#EF4444"   # red
-WARNING = "#F59E0B"   # amber
+# Semantic colors
+SUCCESS = "#10B981"
+DANGER  = "#EF4444"
+WARNING = "#F59E0B"
 
-# Legacy aliases — kept for backward compat with views that import these
+# Secondary accent — teal（用於漸層搭配）
+TEAL   = "#14B8A6"
+
+# Legacy aliases
 GREEN  = SUCCESS
 ROSE   = DANGER
 ORANGE = WARNING
-VIOLET = "#8B5CF6"
-TEAL   = "#14B8A6"
+VIOLET = TEAL      # hero gradient 用 teal 取代 violet
 
-# Stat card palettes: (bg, accent) — muted tones
+# Stat palettes: (bg, accent) — 全部改為綠調
 STAT_PALETTES = [
-    ("#F4F4F5", "#52525B"),   # zinc
-    ("#F0FDF4", "#059669"),   # green
-    ("#FFFBEB", "#D97706"),   # amber
-    ("#EFF6FF", "#3B82F6"),   # blue
+    ("#D1FAE5", "#059669"),   # emerald
+    ("#CCFBF1", "#0D9488"),   # teal
+    ("#D1FAE5", "#10B981"),   # emerald lighter
+    ("#F0FDF4", "#16A34A"),   # green
 ]
 
 # ── Spacing scale (8px grid) ─────────────────────────────────────────
@@ -56,10 +59,10 @@ SP7 = 40
 SP8 = 48
 
 # ── Border radius ────────────────────────────────────────────────────
-RADIUS_S  = 6
-RADIUS_M  = 10
-RADIUS_L  = 14
-RADIUS_XL = 20
+RADIUS_S  = 8
+RADIUS_M  = 12
+RADIUS_L  = 16
+RADIUS_XL = 22
 
 # ── Animations (ease-out, 200-300ms) ─────────────────────────────────
 ANIM      = ft.animation.Animation(200, ft.AnimationCurve.EASE_OUT)
@@ -76,7 +79,7 @@ def alpha(hex_color: str, opacity: float) -> str:
 _alpha = alpha
 
 
-# ── Card factory ─────────────────────────────────────────────────────
+# ── Card factories ────────────────────────────────────────────────────
 
 def card(
     content,
@@ -95,12 +98,12 @@ def card(
         padding=padding,
         border_radius=radius,
         bgcolor=bg,
-        border=ft.border.all(1, border_color),
+        border=ft.border.all(1.5, border_color),
         shadow=ft.BoxShadow(
-            blur_radius=8,
-            spread_radius=0,
+            blur_radius=18,
+            spread_radius=-2,
             color=CARD_SHADOW,
-            offset=ft.Offset(0, 2),
+            offset=ft.Offset(0, 4),
         ),
         expand=expand,
         width=width,
@@ -127,7 +130,13 @@ def gradient_card(
         gradient=ft.LinearGradient(
             begin=ft.alignment.top_left,
             end=ft.alignment.bottom_right,
-            colors=colors or [ACCENT, ACCENT_DARK],
+            colors=colors or [ACCENT, TEAL],
+        ),
+        shadow=ft.BoxShadow(
+            blur_radius=24,
+            spread_radius=-4,
+            color=_alpha(ACCENT, 0.30),
+            offset=ft.Offset(0, 8),
         ),
         expand=expand,
         width=width,
@@ -163,7 +172,7 @@ def section_label(text: str) -> ft.Text:
         text.upper(),
         size=10,
         weight=ft.FontWeight.W_600,
-        color=TEXT_D,
+        color=ACCENT_DARK,
     )
 
 
@@ -193,9 +202,9 @@ def pill_btn(
         style=ft.ButtonStyle(
             shape=ft.RoundedRectangleBorder(radius=RADIUS_M),
             padding=ft.padding.symmetric(horizontal=SP4, vertical=10),
-            bgcolor=color if filled else _alpha(color, 0.07),
+            bgcolor=color if filled else _alpha(color, 0.10),
             elevation=0,
-            overlay_color=_alpha("#000000" if filled else color, 0.06),
+            overlay_color=_alpha("#FFFFFF" if filled else color, 0.10),
         ),
     )
 
@@ -203,13 +212,12 @@ def pill_btn(
 # ── Micro components ──────────────────────────────────────────────────
 
 def icon_badge(icon, color: str = ACCENT, size: int = 16, bg_size: int = 36) -> ft.Container:
-    """Kept for backward compat — prefer plain icons in new designs."""
     return ft.Container(
         content=ft.Icon(icon, size=size, color=color),
         width=bg_size,
         height=bg_size,
         border_radius=bg_size // 2,
-        bgcolor=_alpha(color, 0.10),
+        bgcolor=_alpha(color, 0.12),
         alignment=ft.alignment.center,
     )
 
@@ -219,10 +227,10 @@ def tag_chip(text: str, color: str = ACCENT) -> ft.Container:
         content=ft.Text(text, size=11, color=color, weight=ft.FontWeight.W_500),
         padding=ft.padding.symmetric(horizontal=SP3, vertical=SP1),
         border_radius=RADIUS_S,
-        bgcolor=_alpha(color, 0.08),
-        border=ft.border.all(1, _alpha(color, 0.18)),
+        bgcolor=_alpha(color, 0.10),
+        border=ft.border.all(1, _alpha(color, 0.25)),
     )
 
 
 def soft_divider(height: int = 1) -> ft.Container:
-    return ft.Container(height=height, bgcolor=CARD_BORDER)
+    return ft.Container(height=height, bgcolor=_alpha(ACCENT, 0.20))

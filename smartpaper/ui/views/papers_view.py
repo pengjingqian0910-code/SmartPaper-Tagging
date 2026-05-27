@@ -21,21 +21,21 @@ from ...api import semantic_scholar as ss_api
 from ...api.arxiv import ArxivAPI
 
 # ── 色彩（與 theme.py 同步，neutral palette） ───────────────────────
-BG        = "#F7F7F8"
+BG        = "#EDFAF3"
 CARD      = "#FFFFFF"
-BORDER    = "#E4E4E7"
-BORDER_A  = "#6366F1"
+BORDER    = "#6EE7B7"   # emerald-300 果凍邊框
+BORDER_A  = "#10B981"
 TITLE_C   = "#18181B"
 AUTH_C    = "#3F3F46"
 META_C    = "#71717A"
-TAG_BG    = "#EEF2FF"
-TAG_C     = "#4F46E5"
-YEAR_BG   = "#F0FDF4"
-YEAR_C    = "#059669"
-SRC_BG    = "#F5F3FF"
-SRC_C     = "#7C3AED"
+TAG_BG    = "#D1FAE5"   # emerald-100
+TAG_C     = "#059669"   # emerald-600
+YEAR_BG   = "#CCFBF1"   # teal-100
+YEAR_C    = "#0D9488"   # teal-600
+SRC_BG    = "#F0FDF4"
+SRC_C     = "#16A34A"
 ABST_C    = "#3F3F46"
-ACCENT    = "#6366F1"
+ACCENT    = "#10B981"
 RED       = "#EF4444"
 GREEN     = "#10B981"
 

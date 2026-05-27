@@ -189,7 +189,7 @@ class HomeView:
                 ],
                 spacing=0,
             ),
-            colors=[T.ACCENT, T.VIOLET],
+            colors=[T.ACCENT, T.TEAL],
             expand=3,
             height=160,
         )

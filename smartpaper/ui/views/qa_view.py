@@ -21,12 +21,12 @@ from ...config import GEMINI_API_KEY
 
 MAX_SESSIONS = 5
 
-COLOR_USER_BG        = "#EEF2FF"   # indigo-50, matches accent
-COLOR_ASST_BG        = "#F7F7F8"   # zinc-50, neutral
-COLOR_SOURCE_BG      = "#FAFAFA"
-COLOR_BORDER         = "#E4E4E7"   # zinc-200
+COLOR_USER_BG        = "#D1FAE5"   # emerald-100，使用者泡泡
+COLOR_ASST_BG        = "#F5FDF8"   # 帶綠調的白，助手泡泡
+COLOR_SOURCE_BG      = "#F0FDF4"
+COLOR_BORDER         = "#6EE7B7"   # emerald-300
 COLOR_FULLTEXT_BADGE = "#065F46"   # emerald-900
-COLOR_ABSTRACT_BADGE = "#3730A3"   # indigo-800
+COLOR_ABSTRACT_BADGE = "#0D9488"   # teal-600
 COLOR_TABLE_BADGE    = "#92400E"   # amber-800
 
 _SIDEBAR_W = 340
