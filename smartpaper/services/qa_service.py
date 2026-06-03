@@ -221,9 +221,17 @@ class QAService:
         """雙路徑檢索：全文 chunks + 摘要 fallback"""
         candidates: list[dict] = []   # {text, source_chunk, paper}
 
-        # ── 路徑 A：全文 chunk 搜尋
+        # ── 路徑 A：全文 chunk 搜尋（含 Small-to-Big parent 展開）
         fulltext_results = self.vector_db.search_chunks(query, n_results=top_k * 4)
         paper_chunk_counts: dict[int, int] = {}
+
+        # Small-to-Big：收集所有需要展開的 parent_chunk_id，批次查詢
+        parent_ids_needed = [
+            int(cr["metadata"].get("parent_chunk_id", 0))
+            for cr in fulltext_results
+            if cr.get("metadata", {}).get("parent_chunk_id")
+        ]
+        parent_chunks = self.chunk_store.get_parent_texts(parent_ids_needed) if parent_ids_needed else {}
 
         for cr in fulltext_results:
             pid = cr["paper_id"]
@@ -238,15 +246,29 @@ class QAService:
             if not paper:
                 continue
             paper_chunk_counts[pid] = count + 1
-            snippet = cr["chunk_text"][:MAX_CHUNK_CHARS]
+
+            # Small-to-Big：若有 parent_chunk，改用 parent 的完整文字做 context
+            parent_id = cr.get("metadata", {}).get("parent_chunk_id")
+            if parent_id and int(parent_id) in parent_chunks:
+                parent = parent_chunks[int(parent_id)]
+                snippet = parent.chunk_text[:MAX_CHUNK_CHARS]
+                section = parent.section
+                page_num = parent.page_num or 0
+                is_table = parent.is_table
+            else:
+                snippet = cr["chunk_text"][:MAX_CHUNK_CHARS]
+                section = cr["section"]
+                page_num = cr.get("page_num", 0)
+                is_table = cr.get("is_table", False)
+
             importance = cr.get("importance_weight", 1.0)
             sc = SourceChunk(
                 paper=paper,
-                section=cr["section"],
-                page_num=cr.get("page_num", 0),
+                section=section,
+                page_num=page_num,
                 snippet=snippet,
                 is_fulltext=True,
-                is_table=cr.get("is_table", False),
+                is_table=is_table,
                 section_type=cr.get("section_type", "other"),
                 importance_weight=importance,
             )
@@ -259,7 +281,7 @@ class QAService:
 
         # ── 路徑 B：摘要搜尋（補充沒有全文 chunk 的論文）
         papers_covered = set(paper_chunk_counts.keys())
-        abstract_results = self.search.hybrid_search(query, n_results=top_k * 2)
+        abstract_results = self.search.enhanced_search(query, n_results=top_k * 2)
         for sr in abstract_results:
             if (sr.paper and sr.paper.id not in papers_covered and sr.paper.abstract
                     and (filter_paper_ids is None or sr.paper.id in filter_paper_ids)):

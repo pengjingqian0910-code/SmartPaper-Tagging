@@ -23,6 +23,9 @@ class StoredChunk:
     page_num: int
     is_table: bool
     created_at: str
+    # Small-to-Big 欄位（可能為 None，代表此 chunk 本身是 large/parent）
+    parent_chunk_id: Optional[int] = None
+    chunk_level: str = "large"   # "large" | "small"
 
 
 class ChunkStore:
@@ -45,27 +48,41 @@ class ChunkStore:
         with self._get_conn() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS paper_chunks (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    paper_id    INTEGER NOT NULL,
-                    section     TEXT    NOT NULL,
-                    chunk_text  TEXT    NOT NULL,
-                    chunk_index INTEGER NOT NULL,
-                    page_num    INTEGER,
-                    is_table    INTEGER DEFAULT 0,
-                    created_at  TEXT    NOT NULL,
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    paper_id         INTEGER NOT NULL,
+                    section          TEXT    NOT NULL,
+                    chunk_text       TEXT    NOT NULL,
+                    chunk_index      INTEGER NOT NULL,
+                    page_num         INTEGER,
+                    is_table         INTEGER DEFAULT 0,
+                    created_at       TEXT    NOT NULL,
+                    parent_chunk_id  INTEGER DEFAULT NULL,
+                    chunk_level      TEXT    DEFAULT 'large',
                     FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
                 )
             """)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chunks_paper ON paper_chunks(paper_id)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_parent ON paper_chunks(parent_chunk_id)"
+            )
+            # 為舊資料做 schema migration（已有 table 但缺少新欄位）
+            for col, definition in [
+                ("parent_chunk_id", "INTEGER DEFAULT NULL"),
+                ("chunk_level",     "TEXT DEFAULT 'large'"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE paper_chunks ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass   # column already exists
             conn.commit()
 
     # ── Write ────────────────────────────────────────────────────────────
 
     def insert_chunks(self, paper_id: int, chunks: list[dict]) -> int:
         """
-        批次插入 chunks。chunks 每個 dict 需有：
+        批次插入 large chunks。chunks 每個 dict 需有：
         section, chunk_text, chunk_index, page_num, is_table
 
         回傳插入筆數。
@@ -74,8 +91,9 @@ class ChunkStore:
         with self._get_conn() as conn:
             conn.executemany(
                 """INSERT INTO paper_chunks
-                   (paper_id, section, chunk_text, chunk_index, page_num, is_table, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (paper_id, section, chunk_text, chunk_index, page_num,
+                    is_table, created_at, parent_chunk_id, chunk_level)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'large')""",
                 [
                     (
                         paper_id,
@@ -91,6 +109,62 @@ class ChunkStore:
             )
             conn.commit()
         return len(chunks)
+
+    def insert_small_chunks(
+        self, paper_id: int, small_chunks: list[dict]
+    ) -> list[int]:
+        """
+        批次插入 small chunks，每個 dict 需有：
+        section, chunk_text, chunk_index, page_num, is_table, parent_chunk_id
+
+        回傳新插入的 rowid 列表。
+        """
+        now = datetime.now().isoformat()
+        ids = []
+        with self._get_conn() as conn:
+            for c in small_chunks:
+                cursor = conn.execute(
+                    """INSERT INTO paper_chunks
+                       (paper_id, section, chunk_text, chunk_index, page_num,
+                        is_table, created_at, parent_chunk_id, chunk_level)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'small')""",
+                    (
+                        paper_id,
+                        c["section"],
+                        c["chunk_text"],
+                        c["chunk_index"],
+                        c.get("page_num"),
+                        1 if c.get("is_table") else 0,
+                        now,
+                        c["parent_chunk_id"],
+                    ),
+                )
+                ids.append(cursor.lastrowid)
+            conn.commit()
+        return ids
+
+    def get_last_inserted_ids(self, paper_id: int, chunk_level: str = "large") -> list[int]:
+        """取得某篇論文最新匯入的 large chunk IDs（for building parent refs）"""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT id FROM paper_chunks
+                   WHERE paper_id = ? AND chunk_level = ?
+                   ORDER BY chunk_index""",
+                (paper_id, chunk_level),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_parent_texts(self, parent_ids: list[int]) -> dict[int, "StoredChunk"]:
+        """用 parent_chunk_id 批次取得 large chunk（for Small-to-Big 展開）"""
+        if not parent_ids:
+            return {}
+        placeholders = ",".join("?" * len(parent_ids))
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM paper_chunks WHERE id IN ({placeholders})",
+                parent_ids,
+            ).fetchall()
+        return {r["id"]: self._row_to_chunk(r) for r in rows}
 
     def delete_by_paper(self, paper_id: int) -> int:
         """刪除某篇論文的所有 chunk，回傳刪除筆數"""
@@ -147,6 +221,7 @@ class ChunkStore:
     # ── Helper ───────────────────────────────────────────────────────────
 
     def _row_to_chunk(self, row: sqlite3.Row) -> StoredChunk:
+        keys = row.keys()
         return StoredChunk(
             id=row["id"],
             paper_id=row["paper_id"],
@@ -156,4 +231,6 @@ class ChunkStore:
             page_num=row["page_num"],
             is_table=bool(row["is_table"]),
             created_at=row["created_at"],
+            parent_chunk_id=row["parent_chunk_id"] if "parent_chunk_id" in keys else None,
+            chunk_level=row["chunk_level"] if "chunk_level" in keys else "large",
         )

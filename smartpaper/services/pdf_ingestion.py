@@ -105,7 +105,7 @@ class PDFIngestionService:
         n = len(parse_result.chunks)
         _prog(f"找到 {n} 個 chunk，{parse_result.total_pages} 頁，存入資料庫...")
 
-        # 儲存至 SQLite
+        # ── 儲存 large chunks（Section 級別，現有行為）──────────────
         chunk_dicts = [
             {
                 "section": c.section,
@@ -121,13 +121,33 @@ class PDFIngestionService:
         self.chunk_store.insert_chunks(paper_id, chunk_dicts)
         result.total_chunks = n
 
+        # ── Small-to-Big：切出 sentence-level small chunks ───────────
+        _prog("建立 Small-to-Big 索引（句子級別 chunk）...")
+        large_ids = self.chunk_store.get_last_inserted_ids(paper_id, "large")
+        small_dicts = []
+        for parsed_chunk, large_id in zip(parse_result.chunks, large_ids):
+            if parsed_chunk.is_table:
+                continue   # 表格不再切小，直接用 large chunk
+            for sc in _split_to_small_chunks(
+                parsed_chunk.text, parsed_chunk.section,
+                parsed_chunk.chunk_index, parsed_chunk.page_num, large_id
+            ):
+                small_dicts.append(sc)
+
+        small_ids = []
+        if small_dicts:
+            small_ids = self.chunk_store.insert_small_chunks(paper_id, small_dicts)
+
         # 儲存 PDF 原始路徑，方便之後直接開啟檔案
         self.sqlite_db.set_pdf_path(paper_id, str(Path(pdf_path).resolve()))
 
-        # 批次向量化並存入 ChromaDB
-        _prog(f"向量化 {n} 個 chunk...")
-        self._embed_chunks(paper_id, parse_result.chunks)
-        _prog(f"完成！{n} 個 chunk，{parse_result.table_count} 個表格")
+        # ── 向量化：優先索引 small chunks；若無則 fallback large ─────
+        _prog(f"向量化 chunk（{len(small_dicts) or n} 個）...")
+        if small_dicts and small_ids:
+            self._embed_small_chunks(paper_id, small_dicts, small_ids)
+        else:
+            self._embed_chunks(paper_id, parse_result.chunks)
+        _prog(f"完成！{n} 個 large chunk → {len(small_dicts)} 個 small chunk")
 
         return result
 
@@ -163,7 +183,7 @@ class PDFIngestionService:
     # ── 私有方法 ─────────────────────────────────────────────────────────
 
     def _embed_chunks(self, paper_id: int, chunks: list[ParsedChunk]) -> None:
-        """批次向量化 chunks 並存入 ChromaDB fulltext collection"""
+        """批次向量化 large chunks 並存入 ChromaDB fulltext collection"""
         chunk_dicts = [
             {
                 "chunk_index": c.chunk_index,
@@ -180,3 +200,64 @@ class PDFIngestionService:
             self.vector_db.add_chunks_batch(paper_id, chunk_dicts)
         except Exception as e:
             print(f"[PDFIngestion] 批次向量化失敗: {e}")
+
+    def _embed_small_chunks(
+        self, paper_id: int, small_dicts: list[dict], small_ids: list[int]
+    ) -> None:
+        """批次向量化 small chunks，document ID 包含 SQLite rowid 供 parent 查詢"""
+        embed_dicts = []
+        for sc, sid in zip(small_dicts, small_ids):
+            embed_dicts.append({
+                "chunk_index": sc["chunk_index"],
+                "chunk_text":  sc["chunk_text"],
+                "section":     sc["section"],
+                "page_num":    sc.get("page_num"),
+                "is_table":    sc.get("is_table", False),
+                "section_type": "other",
+                "importance_weight": 1.0,
+                "small_chunk_id":    sid,            # 額外 metadata
+                "parent_chunk_id":   sc["parent_chunk_id"],
+            })
+        try:
+            self.vector_db.add_chunks_batch(
+                paper_id, embed_dicts, id_prefix="small"
+            )
+        except Exception as e:
+            print(f"[PDFIngestion] small chunk 向量化失敗: {e}")
+
+
+# ── module-level helper ───────────────────────────────────────────────
+
+def _split_to_small_chunks(
+    text: str,
+    section: str,
+    base_index: int,
+    page_num: int,
+    parent_chunk_id: int,
+    sentences_per_chunk: int = 3,
+) -> list[dict]:
+    """
+    把一個 large chunk 的文字切成 sentence-level small chunks。
+    每個 small chunk = sentences_per_chunk 個句子。
+    """
+    import re
+    # 依句號/問號/驚嘆號斷句，保留標點
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 10]
+    if not sentences:
+        return []
+
+    small_chunks = []
+    for i in range(0, len(sentences), sentences_per_chunk):
+        group = sentences[i: i + sentences_per_chunk]
+        chunk_text = " ".join(group)
+        if len(chunk_text) < 30:
+            continue
+        small_chunks.append({
+            "section":         section,
+            "chunk_text":      chunk_text,
+            "chunk_index":     base_index * 100 + i,   # 確保不重複
+            "page_num":        page_num,
+            "is_table":        False,
+            "parent_chunk_id": parent_chunk_id,
+        })
+    return small_chunks

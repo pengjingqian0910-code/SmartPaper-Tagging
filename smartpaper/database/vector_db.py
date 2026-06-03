@@ -176,11 +176,14 @@ class VectorDB:
         paper_id: int,
         chunks: list[dict],
         batch_size: int = 64,
+        id_prefix: str = "chunk",
     ) -> None:
         """
         批次新增全文 chunks（比逐個 add 快 10-20x）。
 
-        chunks: list of {chunk_index, chunk_text, section, page_num, is_table}
+        chunks: list of {chunk_index, chunk_text, section, page_num, is_table,
+                         [small_chunk_id], [parent_chunk_id]}
+        id_prefix: "chunk"（large，預設）或 "small"（small-to-big）
         """
         valid = [c for c in chunks if c.get("chunk_text", "").strip()]
         if not valid:
@@ -188,20 +191,26 @@ class VectorDB:
 
         for start in range(0, len(valid), batch_size):
             batch = valid[start: start + batch_size]
-            ids = [f"chunk_{paper_id}_{c['chunk_index']}" for c in batch]
+            ids = [f"{id_prefix}_{paper_id}_{c['chunk_index']}" for c in batch]
             docs = [c["chunk_text"] for c in batch]
-            metas = [
-                {
-                    "paper_id": paper_id,
-                    "section": c["section"],
-                    "chunk_index": c["chunk_index"],
-                    "page_num": c.get("page_num") or 0,
-                    "is_table": 1 if c.get("is_table") else 0,
-                    "section_type": c.get("section_type", "other"),
+            metas = []
+            for c in batch:
+                m = {
+                    "paper_id":          paper_id,
+                    "section":           c.get("section", ""),
+                    "chunk_index":       c["chunk_index"],
+                    "page_num":          c.get("page_num") or 0,
+                    "is_table":          1 if c.get("is_table") else 0,
+                    "section_type":      c.get("section_type", "other"),
                     "importance_weight": float(c.get("importance_weight", 1.0)),
+                    "chunk_level":       "small" if id_prefix == "small" else "large",
                 }
-                for c in batch
-            ]
+                # Small-to-Big 專用欄位
+                if "small_chunk_id" in c:
+                    m["small_chunk_id"]  = c["small_chunk_id"]
+                if "parent_chunk_id" in c:
+                    m["parent_chunk_id"] = c["parent_chunk_id"] or 0
+                metas.append(m)
             self.fulltext_collection.add(ids=ids, documents=docs, metadatas=metas)
 
     def add_chunk(

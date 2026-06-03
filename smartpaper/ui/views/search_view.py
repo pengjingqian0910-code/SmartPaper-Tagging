@@ -138,7 +138,7 @@ class SearchView:
                 )
                 self.results = papers
             elif self.search_mode == "hybrid":
-                results = self.search_service.hybrid_search(
+                results = self.search_service.enhanced_search(
                     query=query,
                     n_results=20,
                 )

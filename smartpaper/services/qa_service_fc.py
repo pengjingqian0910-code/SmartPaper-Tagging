@@ -192,7 +192,7 @@ class FunctionCallingQAService:
         n = min(n_results, 10)
         # 搜尋時多取一些，以便過濾後仍有足夠結果
         fetch_n = n * 3 if self._filter_ids else n
-        results = self.search.hybrid_search(query, n_results=fetch_n, use_rerank=True)
+        results = self.search.enhanced_search(query, n_results=fetch_n, use_rerank=True)
         out = []
         for sr in results:
             p = sr.paper
