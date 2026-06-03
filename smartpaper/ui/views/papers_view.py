@@ -848,6 +848,7 @@ class PapersView:
 
     def _on_search_change(self, e):
         self._search_q = e.control.value or ""
+        self.current_page = 0
         self._load_papers(self.selected_tag, self._search_q)
         self._refresh_list()
         self.page.update()
@@ -855,6 +856,7 @@ class PapersView:
     def _on_tag_change(self, e):
         val = e.control.value
         self.selected_tag = None if val == "__all__" else val
+        self.current_page = 0
         self._load_papers(self.selected_tag, self._search_q)
         self._refresh_list()
         self.page.update()
@@ -1419,6 +1421,7 @@ class PapersView:
 
     def _on_status_filter(self, key: str):
         self._status_filter = key
+        self.current_page = 0   # 篩選後重回第一頁，避免頁碼超出範圍導致空白
         self._status_chips_row.controls = self._build_status_chips().controls
         self._load_papers(self.selected_tag, self._search_q)
         self._refresh_list()

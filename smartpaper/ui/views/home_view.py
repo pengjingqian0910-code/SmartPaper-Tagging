@@ -274,8 +274,9 @@ class HomeView:
                                 "選擇檔案",
                                 "folder_open",
                                 lambda _: self.file_picker.pick_files(
-                                    allowed_extensions=["xlsx", "xls", "csv"],
-                                    dialog_title="選擇論文清單檔案",
+                                    allowed_extensions=["xlsx", "xls", "csv",
+                                                        "bib", "ris", "xml"],
+                                    dialog_title="選擇論文清單檔案（xlsx/csv/bib/ris/xml）",
                                 ),
                                 filled=False,
                             ),
@@ -330,7 +331,16 @@ class HomeView:
         self.selected_file = e.files[0].path
         filename = Path(self.selected_file).name
         self.file_path_text.value = f"📄 {filename}"
-        self._detect_and_show_columns()
+        suffix = Path(self.selected_file).suffix.lower()
+        if suffix in (".bib", ".ris", ".xml"):
+            # 參考文獻格式：不需欄位對應，直接啟用匯入按鈕
+            self.column_panel.visible = False
+            self.process_btn.disabled = False
+            fmt = {"bib": "BibTeX", "ris": "RIS", "xml": "EndNote XML"}.get(suffix[1:], suffix)
+            self.status_text.value = f"已選擇 {fmt} 格式，點擊「開始處理」直接匯入"
+            self.status_text.color = T.ACCENT
+        else:
+            self._detect_and_show_columns()
         self.page.update()
 
     def _detect_and_show_columns(self):
@@ -408,6 +418,28 @@ class HomeView:
 
     def process_file(self, progress_callback=None):
         try:
+            suffix = Path(self.selected_file).suffix.lower()
+            if suffix in (".bib", ".ris", ".xml"):
+                # ── BibTeX / RIS / EndNote XML 直接解析 ──
+                from ...services.reference_parser import parse_reference_file
+                papers = parse_reference_file(self.selected_file)
+                if not papers:
+                    self.status_text.value = "未解析到任何論文，請確認格式是否正確"
+                    self.status_text.color = T.ROSE
+                    return
+                status = self.pipeline.process_papers_list(
+                    papers=papers,
+                    skip_existing=True,
+                    generate_tags=True,
+                    fetch_missing=True,
+                    progress_callback=self.on_progress_update,
+                )
+                self.status_text.value = f"匯入完成！成功：{status.success}，失敗：{status.failed}（共解析 {len(papers)} 篇）"
+                self.status_text.color = T.GREEN
+                new_stats = self._get_stats()
+                self.stats_row.controls = self._build_stats_row(new_stats).controls
+                return
+
             if self.column_panel.visible and self._headers:
                 title_col = int(self.dd_title.value)
                 abstract_col = int(self.dd_abstract.value) if self.dd_abstract.value != "__none__" else -1
