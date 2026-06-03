@@ -1028,88 +1028,75 @@ class HomeView:
 
         def _copy_js(e):
             self.page.set_clipboard(self._BOOKMARKLET)
-            bm_status.value = "✅ 已複製！請在瀏覽器中新增書籤，將網址欄貼上此程式碼"
-            bm_status.color = T.GREEN
+            bm_status.value = "✅ 已複製！在瀏覽器新增書籤，網址欄貼上此程式碼即可"
+            bm_status.color = T.SUCCESS
             self.page.update()
 
         steps = [
-            ("1", "在 Chrome/Edge 開啟書籤列（Ctrl+Shift+B）"),
-            ("2", "點「新增書籤」，名稱填「SmartPaper」"),
-            ("3", "網址欄貼上下方複製的程式碼"),
-            ("4", "在任意論文頁面點書籤，即可一鍵加入文獻庫"),
+            "開啟書籤列（Ctrl+Shift+B）",
+            "點「新增書籤」，名稱填「SmartPaper」",
+            "網址欄貼上複製的程式碼",
+            "在論文頁面點書籤，一鍵加入文獻庫",
         ]
+        steps_col = ft.Column([
+            ft.Row([
+                ft.Container(
+                    content=ft.Text(str(i + 1), size=9, color="#FFFFFF",
+                                    weight=ft.FontWeight.BOLD),
+                    width=18, height=18, border_radius=9,
+                    bgcolor="#0369A1", alignment=ft.alignment.center,
+                ),
+                ft.Text(txt, size=11, color=T.TEXT_B, expand=True),
+            ], spacing=8)
+            for i, txt in enumerate(steps)
+        ], spacing=6, visible=False)
+
+        sources_row = ft.Row([
+            _source_chip(s) for s in
+            ["Google Scholar", "arXiv", "Springer", "Nature",
+             "IEEE Xplore", "ACM DL", "PubMed"]
+        ], spacing=4, wrap=True, visible=False)
+
+        expand_btn = ft.TextButton(
+            "安裝說明", icon="expand_more",
+            style=ft.ButtonStyle(color="#0369A1"),
+        )
+
+        def _toggle(e):
+            steps_col.visible = not steps_col.visible
+            sources_row.visible = steps_col.visible
+            expand_btn.text = "收合" if steps_col.visible else "安裝說明"
+            expand_btn.icon = "expand_less" if steps_col.visible else "expand_more"
+            self.page.update()
+
+        expand_btn.on_click = _toggle
 
         return T.card(
             ft.Column([
                 ft.Row([
-                    T.icon_badge("bookmark_add", "#0369A1", size=16, bg_size=36),
-                    T.h3("瀏覽器 Bookmarklet"),
-                    ft.Container(expand=True),
+                    T.h3("Bookmarklet"),
                     ft.Container(
-                        content=ft.Text("需開啟 SmartPaper", size=10, color="#0369A1"),
-                        bgcolor="#E0F2FE",
-                        border_radius=50,
+                        content=ft.Text("一鍵從瀏覽器加入", size=10, color="#0369A1"),
+                        bgcolor="#E0F2FE", border_radius=50,
                         padding=ft.padding.symmetric(horizontal=8, vertical=3),
                     ),
-                ], spacing=12),
-                T.soft_divider(),
-                ft.Text(
-                    "在瀏覽器中一鍵將論文加入 SmartPaper，支援 Google Scholar、arXiv、Springer、Nature 等",
-                    size=12, color=T.TEXT_M,
-                ),
-                ft.Container(height=4),
-                # 步驟說明
-                ft.Column([
-                    ft.Row([
-                        ft.Container(
-                            content=ft.Text(n, size=10, color="white",
-                                            weight=ft.FontWeight.BOLD),
-                            width=20, height=20, border_radius=10,
-                            bgcolor="#0369A1",
-                            alignment=ft.alignment.center,
-                        ),
-                        ft.Text(txt, size=12, color=T.TEXT_B, expand=True),
-                    ], spacing=10)
-                    for n, txt in steps
-                ], spacing=8),
-                ft.Container(height=4),
-                # 複製按鈕
-                ft.Row([
+                    ft.Container(expand=True),
                     ft.ElevatedButton(
-                        "複製 Bookmarklet 程式碼",
-                        icon="content_copy",
+                        "複製程式碼", icon="content_copy",
                         on_click=_copy_js,
                         style=ft.ButtonStyle(
-                            bgcolor="#0369A1", color="white",
-                            shape=ft.RoundedRectangleBorder(radius=10),
+                            bgcolor="#0369A1", color="#FFFFFF",
+                            shape=ft.RoundedRectangleBorder(radius=8),
+                            padding=ft.padding.symmetric(horizontal=14, vertical=8),
                         ),
                     ),
-                    ft.Text("支援 Chrome · Edge · Firefox · Safari",
-                            size=11, color=T.TEXT_M, italic=True),
-                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    expand_btn,
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 bm_status,
-                ft.Container(
-                    content=ft.Column([
-                        ft.Text("支援自動偵測的來源：", size=11,
-                                weight=ft.FontWeight.W_600, color=T.TEXT_M),
-                        ft.Row([
-                            _source_chip("Google Scholar"),
-                            _source_chip("arXiv"),
-                            _source_chip("Springer"),
-                            _source_chip("Nature"),
-                            _source_chip("IEEE Xplore"),
-                            _source_chip("ACM DL"),
-                            _source_chip("PubMed"),
-                            _source_chip("Semantic Scholar"),
-                        ], spacing=6, wrap=True),
-                    ], spacing=6),
-                    bgcolor="#F0F9FF",
-                    border_radius=8,
-                    border=ft.border.all(1, "#BAE6FD"),
-                    padding=10,
-                ),
-            ], spacing=10),
-            padding=24,
+                steps_col,
+                sources_row,
+            ], spacing=8),
+            padding=ft.padding.symmetric(horizontal=20, vertical=14),
         )
 
     def _close_dlg(self, dlg):

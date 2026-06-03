@@ -172,6 +172,17 @@ class LiteratureView:
                     ft.Row(list(self._fixed_checks.values()), wrap=True, spacing=4),
                     ft.Divider(height=6),
                     _section_title("AI 萃取欄位（從摘要生成）"),
+                    # 快選 preset pills
+                    ft.Row([
+                        ft.Text("快選：", size=10, color=_C_META),
+                        *[self._preset_pill(name, cols)
+                          for name, cols in [
+                              ("方法論", ["研究方法", "主要貢獻"]),
+                              ("評估",   ["資料集", "評估指標"]),
+                              ("全選",   list(self._llm_checks.keys())),
+                              ("清空",   []),
+                          ]],
+                    ], spacing=4, wrap=True),
                     ft.Row(list(self._llm_checks.values()), wrap=True, spacing=4),
                     ft.Divider(height=6),
                     self.custom_cols_input,
@@ -226,6 +237,21 @@ class LiteratureView:
                            spacing=0, expand=True,
                            vertical_alignment=ft.CrossAxisAlignment.START),
             expand=True,
+        )
+
+    def _preset_pill(self, label: str, cols: list[str]) -> ft.Container:
+        def _apply(e, c=cols):
+            for col, cb in self._llm_checks.items():
+                cb.value = (col in c) if c else False
+            self.page.update()
+        return ft.Container(
+            content=ft.Text(label, size=10, color="#4F46E5"),
+            bgcolor="#EEF2FF",
+            border=ft.border.all(1, "#C7D2FE"),
+            border_radius=6,
+            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+            on_click=_apply,
+            ink=True,
         )
 
     def _on_review_search(self, e):

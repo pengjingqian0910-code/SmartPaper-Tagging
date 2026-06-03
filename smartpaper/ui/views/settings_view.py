@@ -221,75 +221,95 @@ class SettingsView:
         except Exception:
             pass
 
-    # ── 模型選擇卡片 ─────────────────────────────────────────────────────────
+    # ── 模型選擇卡片（卡片式，可一眼對比）────────────────────────────────────
 
     def _build_model_card(self) -> ft.Control:
-        current = config.GEMINI_MODEL
-
+        self._current_model = config.GEMINI_MODEL
         self._model_status = ft.Text("", size=11)
+        self._model_cards: dict[str, ft.Container] = {}
 
-        options_col = ft.Column(spacing=6)
-        self._model_radio_group = ft.RadioGroup(
-            content=options_col,
-            value=current,
-            on_change=self._on_model_change,
-        )
+        cards_row = ft.Row(wrap=True, spacing=10)
 
         for model_id, display_name, desc in GEMINI_MODEL_OPTIONS:
+            is_selected = model_id == self._current_model
             is_default = model_id == "gemini-2.5-flash"
-            options_col.controls.append(
-                ft.Container(
-                    content=ft.Row([
-                        ft.Radio(value=model_id, label=""),
-                        ft.Column([
-                            ft.Row([
-                                ft.Text(display_name, size=12,
-                                        weight=ft.FontWeight.W_600),
-                                *([ ft.Container(
-                                    content=ft.Text("推薦", size=9,
-                                                    color=ft.colors.WHITE),
-                                    bgcolor="#059669", border_radius=8,
-                                    padding=ft.padding.symmetric(
-                                        horizontal=6, vertical=1),
-                                )] if is_default else []),
-                            ], spacing=6),
-                            ft.Text(desc, size=11, color=ft.colors.GREY_600),
-                            ft.Text(model_id, size=10,
-                                    color=ft.colors.GREY_400,
-                                    font_family="monospace"),
-                        ], spacing=2, expand=True),
-                    ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    bgcolor="#F8FAFC" if model_id != current else "#F5F3FF",
-                    border=ft.border.all(
-                        1, "#7C3AED" if model_id == current else "#E2E8F0"),
-                    border_radius=8,
-                    padding=ft.padding.symmetric(horizontal=8, vertical=6),
-                )
+
+            badge = ft.Container(
+                content=ft.Text("推薦", size=9, color="#FFFFFF"),
+                bgcolor="#059669", border_radius=6,
+                padding=ft.padding.symmetric(horizontal=6, vertical=1),
+                visible=is_default,
             )
 
+            card = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text(display_name, size=13,
+                                weight=ft.FontWeight.W_600,
+                                color="#1D4ED8" if is_selected else "#18181B"),
+                        badge,
+                    ], spacing=6),
+                    ft.Text(desc, size=11,
+                            color="#6B7280"),
+                    ft.Text(model_id, size=10,
+                            color="#9CA3AF"),
+                ], spacing=4),
+                width=230,
+                padding=14,
+                border_radius=10,
+                bgcolor="#EFF6FF" if is_selected else "#FFFFFF",
+                border=ft.border.all(
+                    2 if is_selected else 1,
+                    "#1D4ED8" if is_selected else "#E5E7EB"
+                ),
+                shadow=ft.BoxShadow(blur_radius=4, spread_radius=0,
+                                     color="#08000000", offset=ft.Offset(0, 1))
+                       if is_selected else None,
+                on_click=lambda e, mid=model_id: self._on_model_card_click(mid),
+                ink=True,
+            )
+            self._model_cards[model_id] = card
+            cards_row.controls.append(card)
+
         content = ft.Column([
-            ft.Text(
-                "選擇 Gemini 模型。模型切換即時生效，不需重啟程式。",
-                size=11, color=ft.colors.GREY_600,
-            ),
-            self._model_radio_group,
+            ft.Text("點擊選擇模型，即時生效無需重啟。",
+                    size=11, color="#6B7280"),
+            cards_row,
             self._model_status,
         ], spacing=10)
 
         return _card("AI 模型選擇", ft.icons.PSYCHOLOGY_OUTLINED, "#1D4ED8",
                      content, "#DBEAFE")
 
-    def _on_model_change(self, e):
-        selected = e.control.value
-        set_gemini_model(selected)
-        # 更新卡片邊框高亮（重建選項）
-        self._model_status.value = f"✓ 已切換至 {selected}"
-        self._model_status.color = ft.colors.GREEN_700
+    def _on_model_card_click(self, model_id: str):
+        prev = self._current_model
+        self._current_model = model_id
+        set_gemini_model(model_id)
+
+        # 更新卡片外觀
+        for mid, card in self._model_cards.items():
+            is_sel = mid == model_id
+            card.bgcolor = "#EFF6FF" if is_sel else "#FFFFFF"
+            card.border = ft.border.all(2 if is_sel else 1,
+                                         "#1D4ED8" if is_sel else "#E5E7EB")
+            card.shadow = (ft.BoxShadow(blur_radius=4, spread_radius=0,
+                                         color="#08000000", offset=ft.Offset(0, 1))
+                           if is_sel else None)
+            card.content.controls[0].controls[0].color = (
+                "#1D4ED8" if is_sel else "#18181B"
+            )
+
+        self._model_status.value = f"✓ 已切換至 {model_id}"
+        self._model_status.color = "#059669"
+        self._show_snack(f"模型已切換至 {model_id}，即時生效")
         try:
-            self._model_status.update()
+            self.page.update()
         except Exception:
             pass
-        self._show_snack(f"模型已切換至 {selected}，即時生效")
+
+    def _on_model_change(self, e):
+        """Backward compat for RadioGroup (no longer used)."""
+        self._on_model_card_click(e.control.value)
 
     # ── 版本更新卡片 ─────────────────────────────────────────────────────────
 

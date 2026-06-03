@@ -144,10 +144,30 @@ class GraphView:
 
         stats = self.kg_service.get_graph_stats()
 
+        # ── 互動提示橫幅 ─────────────────────────────────────────
+        hint_banner = ft.Container(
+            content=ft.Row([
+                ft.Icon("touch_app", size=14, color="#4F46E5"),
+                ft.Text(
+                    "點擊年份柱狀圖篩選論文　·　點擊左側標籤名稱查看共現分析　·　聚焦模式可探索 N 跳鄰居",
+                    size=11, color="#4F46E5",
+                ),
+            ], spacing=8),
+            bgcolor="#EEF2FF",
+            border=ft.border.all(1, "#C7D2FE"),
+            border_radius=8,
+            padding=ft.padding.symmetric(horizontal=14, vertical=8),
+        )
+
         return ft.Column([
-            ft.Text("知識圖譜與工具", size=26, weight=ft.FontWeight.BOLD, color=TEXT_H),
-            ft.Text("視覺化論文關聯，分析標籤分布，匯出引用格式", size=13, color=TEXT_M),
-            ft.Divider(height=4, color=BORDER),
+            ft.Row([
+                ft.Column([
+                    ft.Text("知識圖譜與工具", size=22, weight=ft.FontWeight.BOLD, color=TEXT_H),
+                    ft.Text("視覺化論文關聯，分析標籤分布，匯出引用格式", size=11, color=TEXT_M),
+                ], spacing=2),
+            ]),
+            ft.Divider(height=1, color=BORDER),
+            hint_banner,
             self._build_stats(stats),
             self._build_year_trend(stats),
             self._build_tag_analysis(),

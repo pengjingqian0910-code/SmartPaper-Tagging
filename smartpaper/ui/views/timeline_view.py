@@ -71,42 +71,43 @@ class TimelineView:
     # ── 統計卡片列 ────────────────────────────────────────────────────
 
     def _build_stats_row(self, total: int, by_status: dict,
-                         starred: list[Paper]) -> ft.Row:
+                         starred: list[Paper]) -> ft.Column:
+        """2×3 grid of stat cards (adapts to narrower windows)"""
         def stat_card(icon, label, value, color, bg):
             return ft.Container(
                 content=ft.Column([
-                    ft.Row([
-                        ft.Icon(icon, color=color, size=18),
-                        ft.Text(label, size=11, color=ft.colors.GREY_600),
-                    ], spacing=6),
-                    ft.Text(str(value), size=26, weight=ft.FontWeight.BOLD,
+                    ft.Text(label, size=10, color="#71717A"),
+                    ft.Text(str(value), size=24, weight=ft.FontWeight.BOLD,
                             color=color),
-                ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                ], spacing=2),
                 bgcolor=bg,
                 border=ft.border.all(1, color),
-                border_radius=12,
-                padding=ft.padding.symmetric(horizontal=20, vertical=14),
+                border_radius=10,
+                padding=ft.padding.symmetric(horizontal=16, vertical=12),
                 expand=True,
             )
 
-        read_pct = (
-            int(by_status.get("read", 0) / total * 100) if total else 0
-        )
+        read_pct = int(by_status.get("read", 0) / total * 100) if total else 0
 
-        return ft.Row([
+        row1 = ft.Row([
             stat_card("library_books", "總論文數",   total,
                       "#4F46E5", "#EEF2FF"),
             stat_card("star",          "加星號",
                       len(starred),           "#D97706", "#FEF3C7"),
             stat_card("check_circle",  "已讀",
                       by_status.get("read", 0),    "#059669", "#F0FDF4"),
+        ], spacing=10)
+
+        row2 = ft.Row([
             stat_card("menu_book",     "閱讀中",
                       by_status.get("reading", 0), "#4F46E5", "#EEF2FF"),
             stat_card("radio_button_unchecked", "未讀",
                       by_status.get("unread", 0),  "#6B7280", "#F3F4F6"),
             stat_card("percent",       "完讀率",
                       f"{read_pct}%",              "#7C3AED", "#F5F3FF"),
-        ], spacing=12)
+        ], spacing=10)
+
+        return ft.Column([row1, row2], spacing=10)
 
     # ── 每月匯入長條圖 ────────────────────────────────────────────────
 
@@ -243,6 +244,9 @@ class TimelineView:
                     ft.Icon("star", color="#D97706", size=16),
                     ft.Text(f"加星號論文（{len(starred)} 篇）", size=13,
                             weight=ft.FontWeight.W_600, color="#D97706"),
+                    ft.Container(expand=True),
+                    *([ ft.Text("← 左右滑動查看更多", size=10, color="#D97706",
+                                italic=True) ] if len(starred) > 3 else []),
                 ], spacing=8),
                 ft.Divider(height=4, color="#FDE68A"),
                 ft.Row(cards, spacing=10, scroll=ft.ScrollMode.AUTO, wrap=False),

@@ -129,6 +129,24 @@ class WritingGuideView:
             self.status_text.value = "未設定 Gemini API Key — AI 功能停用"
             self.status_text.color = ft.colors.ORANGE_700
 
+        # 步驟預估時間 badges
+        def _est(label: str) -> ft.Container:
+            return ft.Container(
+                content=ft.Text(label, size=9, color="#71717A"),
+                bgcolor="#F3F4F6",
+                border_radius=6,
+                padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            )
+
+        step_hints = ft.Column([
+            ft.Row([self.find_btn,    _est("約 10–30 秒")], spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([self.analyze_btn, _est("約 30–60 秒")], spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([self.enrich_btn,  _est("約 1–3 分鐘")], spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=8)
+
         left_panel = ft.Container(
             content=ft.Column([
                 ft.Text("引用導引", size=18, weight=ft.FontWeight.BOLD, color=_C_TITLE),
@@ -137,7 +155,7 @@ class WritingGuideView:
                 self.outline_input,
                 ft.Divider(height=4, color=_C_BORDER),
                 self.n_candidates_dropdown,
-                ft.Column([self.find_btn, self.analyze_btn, self.enrich_btn], spacing=8),
+                step_hints,
                 ft.Row([self.progress_ring, self.status_text], spacing=8,
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.export_btn,

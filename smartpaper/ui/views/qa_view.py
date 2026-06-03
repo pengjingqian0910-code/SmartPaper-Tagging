@@ -249,23 +249,40 @@ class QAView:
             padding=ft.padding.only(right=10, top=2),
         )
 
-        self._fc_switch = ft.Switch(
-            label="Function Calling 模式",
-            value=False,
-            active_color="#7C3AED",
-            label_style=ft.TextStyle(size=11, color="#7C3AED"),
-            on_change=self._on_fc_toggle,
-        )
-
-        # ℹ️ 模式說明面板（預設隱藏，點 info 按鈕切換）
+        # ── 模式切換：顯著的 segment 按鈕 ─────────────────────────
         self._mode_info_panel = self._build_mode_info_panel()
         self._mode_info_panel.visible = False
 
+        self._mode_classic_btn = ft.Container(
+            content=ft.Text("Classic RAG", size=12,
+                            color="#FFFFFF", weight=ft.FontWeight.W_600),
+            bgcolor="#4F46E5",
+            border=ft.border.all(1, "#4F46E5"),
+            border_radius=ft.border_radius.only(top_left=8, bottom_left=8),
+            padding=ft.padding.symmetric(horizontal=14, vertical=7),
+            on_click=lambda e: self._set_mode(False),
+            ink=True,
+            tooltip="Classic RAG：串流回答，引用來源清楚",
+        )
+        self._mode_fc_btn = ft.Container(
+            content=ft.Text("Function Calling", size=12,
+                            color="#6B7280"),
+            bgcolor="#FFFFFF",
+            border=ft.border.all(1, "#E5E7EB"),
+            border_radius=ft.border_radius.only(top_right=8, bottom_right=8),
+            padding=ft.padding.symmetric(horizontal=14, vertical=7),
+            on_click=lambda e: self._set_mode(True),
+            ink=True,
+            tooltip="Function Calling：工具調用模式，適合複雜多步驟問題",
+        )
+        self._fc_switch = ft.Switch(value=False, visible=False,
+                                    on_change=self._on_fc_toggle)
+
+        mode_seg = ft.Row([self._mode_classic_btn, self._mode_fc_btn],
+                          spacing=0)
         info_btn = ft.IconButton(
-            icon=ft.icons.INFO_OUTLINE,
-            icon_color="#7C3AED",
-            icon_size=18,
-            tooltip="查看兩種模式的差異說明",
+            icon=ft.icons.INFO_OUTLINE, icon_color="#9CA3AF",
+            icon_size=16, tooltip="查看兩種模式差異",
             on_click=self._on_toggle_mode_info,
         )
 
@@ -276,7 +293,7 @@ class QAView:
                     ft.Text("根據論文庫回答問題，有全文的論文提供章節級引用",
                             size=11, color=ft.colors.GREY_600),
                 ], spacing=2, expand=True),
-                ft.Row([self._fc_switch, info_btn], spacing=0,
+                ft.Row([mode_seg, info_btn], spacing=4,
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -285,6 +302,18 @@ class QAView:
             ft.Row([left_col, right_col], expand=True, spacing=0,
                    vertical_alignment=ft.CrossAxisAlignment.START),
         ], expand=True, spacing=8)
+
+    def _set_mode(self, use_fc: bool):
+        self._use_fc = use_fc
+        self._fc_switch.value = use_fc
+        # 更新 segment 按鈕外觀
+        self._mode_classic_btn.bgcolor = "#FFFFFF" if use_fc else "#4F46E5"
+        self._mode_classic_btn.border = ft.border.all(1, "#E5E7EB" if use_fc else "#4F46E5")
+        self._mode_classic_btn.content.color = "#6B7280" if use_fc else "#FFFFFF"
+        self._mode_fc_btn.bgcolor = "#4F46E5" if use_fc else "#FFFFFF"
+        self._mode_fc_btn.border = ft.border.all(1, "#4F46E5" if use_fc else "#E5E7EB")
+        self._mode_fc_btn.content.color = "#FFFFFF" if use_fc else "#6B7280"
+        self.page.update()
 
     # ── 側邊欄 Section 0：歷史對話 ───────────────────────────────────────
 
@@ -971,12 +1000,26 @@ class QAView:
         }
 
     def _build_session_bar(self) -> ft.Row:
-        tabs = [self._build_session_tab(i, s) for i, s in enumerate(self._sessions)]
+        self._session_dropdown = ft.Dropdown(
+            options=self._session_dropdown_opts(),
+            value=str(self._current_session_idx),
+            width=220, height=40,
+            text_size=12,
+            border_radius=8,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=0),
+            on_change=self._on_session_dropdown_change,
+        )
         new_btn = ft.IconButton(
             icon="add_circle_outline",
             tooltip=f"新對話（最多 {MAX_SESSIONS} 個）",
             icon_color="#1D4ED8", icon_size=18,
             on_click=self._on_new_session,
+        )
+        delete_btn = ft.IconButton(
+            icon="delete_outline",
+            tooltip="刪除目前對話",
+            icon_color="#DC2626", icon_size=16,
+            on_click=lambda e: self._delete_session(self._current_session_idx),
         )
         export_btn = ft.IconButton(
             icon="download",
@@ -985,57 +1028,46 @@ class QAView:
             on_click=self._on_export_session,
         )
         return ft.Row(
-            tabs + [new_btn, export_btn],
-            spacing=4, scroll=ft.ScrollMode.AUTO,
+            [self._session_dropdown, new_btn, delete_btn, export_btn],
+            spacing=2,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
+    def _session_dropdown_opts(self) -> list[ft.dropdown.Option]:
+        return [
+            ft.dropdown.Option(str(i), s["title"][:30])
+            for i, s in enumerate(self._sessions)
+        ]
+
+    def _on_session_dropdown_change(self, e):
+        try:
+            idx = int(e.control.value)
+            self._switch_session(idx)
+        except (ValueError, TypeError):
+            pass
+
     def _build_session_tab(self, idx: int, session: dict) -> ft.Container:
+        """Kept for compatibility — not used by new dropdown bar."""
         is_active = (idx == self._current_session_idx)
         return ft.Container(
-            content=ft.Row([
-                ft.Text(
-                    session["title"][:22] + ("…" if len(session["title"]) > 22 else ""),
-                    size=12,
-                    color="#1D4ED8" if is_active else "#64748B",
-                    weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
-                ),
-                ft.IconButton(
-                    icon="close", icon_size=13,
-                    icon_color="#94A3B8",
-                    tooltip="刪除此對話",
-                    on_click=lambda e, i=idx: self._delete_session(i),
-                    style=ft.ButtonStyle(
-                        padding=ft.padding.all(0),
-                    ),
-                ),
-            ], spacing=0, tight=True,
-               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            content=ft.Text(
+                session["title"][:22] + ("…" if len(session["title"]) > 22 else ""),
+                size=12,
+                color="#1D4ED8" if is_active else "#64748B",
+            ),
             bgcolor="#DBEAFE" if is_active else "#F8FAFC",
             border=ft.border.all(1, "#3B82F6" if is_active else "#E2E8F0"),
             border_radius=6,
             padding=ft.padding.symmetric(horizontal=8, vertical=3),
             on_click=lambda e, i=idx: self._switch_session(i),
-            ink=not is_active,
         )
 
     def _rebuild_session_bar(self):
         if self._session_bar is None:
             return
-        tabs = [self._build_session_tab(i, s) for i, s in enumerate(self._sessions)]
-        new_btn = ft.IconButton(
-            icon="add_circle_outline",
-            tooltip=f"新對話（最多 {MAX_SESSIONS} 個）",
-            icon_color="#1D4ED8", icon_size=18,
-            on_click=self._on_new_session,
-        )
-        export_btn = ft.IconButton(
-            icon="download",
-            tooltip="匯出目前對話為 Markdown",
-            icon_color="#059669", icon_size=18,
-            on_click=self._on_export_session,
-        )
-        self._session_bar.controls = tabs + [new_btn, export_btn]
+        if hasattr(self, '_session_dropdown') and self._session_dropdown:
+            self._session_dropdown.options = self._session_dropdown_opts()
+            self._session_dropdown.value = str(self._current_session_idx)
 
     def _save_current_session(self):
         if not self._sessions:
