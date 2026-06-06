@@ -622,6 +622,13 @@ class PapersView:
         # 閱讀狀態篩選
         self._status_filter: str = "all"   # all / starred / unread / reading / read
         self._sqlite = SQLiteDB()
+        # 語意搜尋模式
+        self._search_mode: str = "filter"   # "filter" | "semantic"
+        self._score_map: dict[int, float] = {}   # paper_id → relevance score
+        self._semantic_submode: str = "hybrid"   # hybrid / semantic / concept
+        self._mode_filter_btn: Optional[ft.Container] = None
+        self._mode_semantic_btn: Optional[ft.Container] = None
+        self._semantic_controls: Optional[ft.Row] = None
 
     # ── Build ─────────────────────────────────────────────────────────
 
@@ -645,7 +652,36 @@ class PapersView:
         self.file_picker.on_result = self._on_export_path
         self.page.overlay.append(self.file_picker)
 
-        # 搜尋框
+        # ── 模式切換按鈕（篩選 / 語意搜尋）─────────────────────────
+        self._mode_filter_btn = ft.Container(
+            content=ft.Text("篩選", size=12, color="#FFFFFF",
+                            weight=ft.FontWeight.W_600),
+            bgcolor=ACCENT, border=ft.border.all(1, ACCENT),
+            border_radius=ft.border_radius.only(top_left=8, bottom_left=8),
+            padding=ft.padding.symmetric(horizontal=14, vertical=7),
+            on_click=lambda e: self._set_search_mode("filter"),
+            ink=True, tooltip="快速篩選目前文獻庫",
+        )
+        self._mode_semantic_btn = ft.Container(
+            content=ft.Text("語意搜尋", size=12, color=META_C),
+            bgcolor=CARD, border=ft.border.all(1, BORDER),
+            border_radius=ft.border_radius.only(top_right=8, bottom_right=8),
+            padding=ft.padding.symmetric(horizontal=14, vertical=7),
+            on_click=lambda e: self._set_search_mode("semantic"),
+            ink=True, tooltip="向量語意搜尋（支援自然語言）",
+        )
+
+        # 語意子模式 chips（語意模式下才顯示）
+        self._semantic_chips = ft.Row([
+            self._make_submode_chip("hybrid",   "混合（推薦）"),
+            self._make_submode_chip("semantic", "純語意"),
+            self._make_submode_chip("concept",  "概念"),
+        ], spacing=4, visible=False)
+        self._submode_chip_refs: dict[str, ft.Container] = {}
+        for chip in self._semantic_chips.controls:
+            self._submode_chip_refs[chip.data] = chip   # type: ignore
+
+        # 搜尋框（篩選模式：on_change；語意模式：on_submit）
         self._search_field = ft.TextField(
             hint_text="搜尋標題、作者、期刊…",
             prefix_icon="search",
@@ -656,6 +692,21 @@ class PapersView:
             filled=True,
             fill_color=CARD,
             on_change=self._on_search_change,
+        )
+
+        # 語意搜尋按鈕（語意模式下才顯示）
+        self._semantic_search_btn = ft.IconButton(
+            icon="search", icon_color=ACCENT, icon_size=18,
+            tooltip="執行語意搜尋",
+            on_click=self._on_semantic_search,
+            visible=False,
+        )
+        # 清除語意搜尋結果按鈕
+        self._semantic_clear_btn = ft.TextButton(
+            "清除搜尋", icon="close",
+            style=ft.ButtonStyle(color=META_C),
+            on_click=self._on_clear_semantic,
+            visible=False,
         )
 
         # 標籤篩選
@@ -770,13 +821,20 @@ class PapersView:
 
         # 篩選列
         filter_row = ft.Container(
-            content=ft.Row([
-                self._select_all_cb,
-                self._search_field,
-                self.tag_dropdown,
-                self.sort_dd,
-                self._sort_dir_btn,
-            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            content=ft.Column([
+                ft.Row([
+                    ft.Row([self._mode_filter_btn, self._mode_semantic_btn],
+                           spacing=0),
+                    self._search_field,
+                    self._semantic_search_btn,
+                    self.tag_dropdown,
+                    self.sort_dd,
+                    self._sort_dir_btn,
+                    self._select_all_cb,
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([self._semantic_chips, self._semantic_clear_btn],
+                       spacing=8, visible=True),
+            ], spacing=6),
             padding=ft.padding.symmetric(horizontal=14, vertical=10),
             border_radius=12,
             bgcolor=CARD,
@@ -1427,6 +1485,103 @@ class PapersView:
         self._refresh_list()
         self.page.update()
 
+    # ── 語意搜尋模式 ─────────────────────────────────────────────────
+
+    def _make_submode_chip(self, key: str, label: str) -> ft.Container:
+        is_active = key == self._semantic_submode
+        chip = ft.Container(
+            content=ft.Text(label, size=11,
+                            color="#FFFFFF" if is_active else META_C,
+                            weight=ft.FontWeight.W_500),
+            bgcolor=ACCENT if is_active else CARD,
+            border=ft.border.all(1, ACCENT if is_active else BORDER),
+            border_radius=8,
+            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+            on_click=lambda e, k=key: self._on_submode_click(k),
+            ink=True,
+            data=key,
+        )
+        return chip
+
+    def _on_submode_click(self, key: str):
+        self._semantic_submode = key
+        for k, chip in self._submode_chip_refs.items():
+            is_active = k == key
+            chip.bgcolor = ACCENT if is_active else CARD
+            chip.border = ft.border.all(1, ACCENT if is_active else BORDER)
+            chip.content.color = "#FFFFFF" if is_active else META_C
+        self.page.update()
+
+    def _set_search_mode(self, mode: str):
+        self._search_mode = mode
+        is_semantic = mode == "semantic"
+
+        # 更新 segment 按鈕外觀
+        if self._mode_filter_btn and self._mode_semantic_btn:
+            self._mode_filter_btn.bgcolor = CARD if is_semantic else ACCENT
+            self._mode_filter_btn.border = ft.border.all(1, BORDER if is_semantic else ACCENT)
+            self._mode_filter_btn.content.color = META_C if is_semantic else "#FFFFFF"
+            self._mode_semantic_btn.bgcolor = ACCENT if is_semantic else CARD
+            self._mode_semantic_btn.border = ft.border.all(1, ACCENT if is_semantic else BORDER)
+            self._mode_semantic_btn.content.color = "#FFFFFF" if is_semantic else META_C
+
+        # 顯示/隱藏語意搜尋專屬控件
+        if self._semantic_chips:
+            self._semantic_chips.visible = is_semantic
+        if self._semantic_search_btn:
+            self._semantic_search_btn.visible = is_semantic
+
+        if is_semantic:
+            # 語意模式：改 hint text，取消 on_change（避免每字觸發搜尋）
+            self._search_field.hint_text = "輸入自然語言描述，按 Enter 搜尋…"
+            self._search_field.on_change = None
+            self._search_field.on_submit = self._on_semantic_search
+        else:
+            # 篩選模式：還原
+            self._search_field.hint_text = "搜尋標題、作者、期刊…"
+            self._search_field.on_change = self._on_search_change
+            self._search_field.on_submit = None
+            self._on_clear_semantic(None)
+
+        self.page.update()
+
+    def _on_semantic_search(self, e):
+        query = (self._search_field.value or "").strip()
+        if not query:
+            return
+        self._count_text.value = "語意搜尋中…"
+        self._semantic_clear_btn.visible = True
+        self.page.update()
+
+        try:
+            if self._semantic_submode == "semantic":
+                results = self.search_service.semantic_search(query, n_results=50)
+            elif self._semantic_submode == "concept":
+                from ...services.concept_extractor import ConceptExtractor
+                papers = ConceptExtractor().search_by_concept(query)
+                results = [type("SR", (), {"paper": p, "score": 0.8})() for p in papers]
+            else:   # hybrid (default)
+                results = self.search_service.enhanced_search(query, n_results=50)
+
+            self._score_map = {r.paper.id: r.score for r in results}
+            self.papers = [r.paper for r in results]
+            self.current_page = 0
+            self._count_text.value = f"語意搜尋：找到 {len(self.papers)} 篇"
+            self._refresh_list()
+        except Exception as ex:
+            self._count_text.value = f"搜尋失敗：{ex}"
+        self.page.update()
+
+    def _on_clear_semantic(self, e):
+        self._score_map.clear()
+        self._semantic_clear_btn.visible = False
+        self._search_field.value = ""
+        self._search_q = ""
+        self.current_page = 0
+        self._load_papers(self.selected_tag, "")
+        self._refresh_list()
+        self.page.update()
+
     # ── 星號 / 閱讀狀態 快速操作 ─────────────────────────────────────
 
     def _on_toggle_star(self, paper: Paper):
@@ -1462,6 +1617,18 @@ class PapersView:
         )
 
         badges: list[ft.Control] = []
+        # 語意搜尋分數 badge
+        score = self._score_map.get(p.id)
+        if score is not None:
+            pct = int(score * 100)
+            clr = GREEN if score >= 0.7 else "#D97706" if score >= 0.4 else RED
+            badges.append(ft.Container(
+                content=ft.Text(f"{pct}%", size=9, color=clr, weight=ft.FontWeight.W_600),
+                padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                border=ft.border.all(1, clr),
+                border_radius=4,
+                bgcolor="#F0FDF4" if score >= 0.7 else "#FFFBEB" if score >= 0.4 else "#FEF2F2",
+            ))
         if p.year:
             badges.append(_chip(str(p.year), YEAR_BG, YEAR_C, 9))
         if p.source:

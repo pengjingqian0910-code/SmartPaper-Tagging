@@ -8,7 +8,6 @@ import flet as ft
 
 from .views.home_view import HomeView
 from .views.papers_view import PapersView
-from .views.search_view import SearchView
 from .views.classify_view import ClassifyView
 from .views.writing_guide_view import WritingGuideView
 from .views.graph_view import GraphView
@@ -22,7 +21,6 @@ from . import theme as T
 _NAV_ICON_NAMES = [
     ("home",            "home_outlined",           "首頁"),
     ("library_books",   "library_books_outlined",  "論文管理"),
-    ("search",          "search_outlined",         "搜尋"),
     ("category",        "category_outlined",       "分類"),
     ("edit_note",       "edit_note_outlined",      "寫作導引"),
     ("bubble_chart",    "bubble_chart_outlined",   "圖譜工具"),
@@ -166,7 +164,6 @@ class SmartPaperApp:
     def setup_navigation(self):
         self.home_view = HomeView(self.page)
         self.papers_view = PapersView(self.page)
-        self.search_view = SearchView(self.page)
         self.classify_view = ClassifyView(self.page)
         self.writing_guide_view = WritingGuideView(self.page)
         self.graph_view = GraphView(self.page)
@@ -232,7 +229,6 @@ class SmartPaperApp:
         views = [
             self.home_view,
             self.papers_view,
-            self.search_view,
             self.classify_view,
             self.writing_guide_view,
             self.graph_view,
