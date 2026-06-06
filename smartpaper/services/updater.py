@@ -11,6 +11,8 @@ GitHub Releases 自動更新服務
 
 import json
 import shutil
+import subprocess
+import sys
 import tempfile
 import urllib.request
 import zipfile
@@ -119,29 +121,38 @@ def download_update(url: str, progress_callback=None) -> bool:
 # ── 套用更新（啟動時呼叫）──────────────────────────────────────────────
 
 
-def apply_pending_update() -> bool:
+def apply_pending_update(progress_callback=None) -> bool:
     """
-    若 _update_ready + _update.zip 存在，解壓並覆蓋專案檔案。
-    成功回傳 True，並更新 version.txt。
-    在 setup_and_run.py 的最開始呼叫此函數。
+    若 _update_ready + _update.zip 存在，解壓並覆蓋專案檔案，
+    然後重新執行 pip install -r requirements.txt 以安裝新依賴。
+
+    progress_callback(stage: str) 在各階段被呼叫，供 UI 顯示進度。
+    成功回傳 True；失敗回傳 False（不拋出例外，讓啟動流程繼續）。
     """
     if not UPDATE_READY.exists() or not UPDATE_ZIP.exists():
         return False
 
+    def _cb(msg: str):
+        if progress_callback:
+            try:
+                progress_callback(msg)
+            except Exception:
+                pass
+
     try:
+        # ── 1. 解壓並覆蓋程式碼 ──────────────────────────────────────
+        _cb("解壓更新檔…")
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
 
             with zipfile.ZipFile(UPDATE_ZIP) as zf:
                 zf.extractall(tmp_path)
 
-            # GitHub zipball 內有一個頂層目錄（repo-commit 格式）
             extracted = [p for p in tmp_path.iterdir() if p.is_dir()]
             if not extracted:
                 return False
             src = extracted[0]
 
-            # 複製新檔案（跳過保留項目）
             for item in src.iterdir():
                 if item.name in _PRESERVE:
                     continue
@@ -153,9 +164,40 @@ def apply_pending_update() -> bool:
                 else:
                     shutil.copy2(item, dst)
 
-        # 清除更新標記
         UPDATE_ZIP.unlink(missing_ok=True)
         UPDATE_READY.unlink(missing_ok=True)
+
+        # ── 2. 重新安裝套件（新版可能有新或升版依賴）──────────────────
+        _cb("更新 Python 套件…")
+        req_file = PROJECT_ROOT / "requirements.txt"
+        if req_file.exists():
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", str(req_file),
+                 "--disable-pip-version-check"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=str(PROJECT_ROOT),
+            )
+            if result.returncode != 0:
+                # 記錄錯誤但不中止，讓程式繼續以舊套件啟動
+                log_path = PROJECT_ROOT / "_update_pip_error.log"
+                log_path.write_text(result.stdout + result.stderr, encoding="utf-8")
+
+        # ── 3. 重設 .setup_done（讓 setup_and_run.py 比對版本號）─────
+        # 讀取新版的 SETUP_VERSION（若 setup_and_run.py 更新了版本號）
+        setup_script = PROJECT_ROOT / "setup_and_run.py"
+        new_setup_ver = None
+        if setup_script.exists():
+            for line in setup_script.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("SETUP_VERSION"):
+                    new_setup_ver = line.split("=", 1)[1].strip().strip('"\'')
+                    break
+        marker = PROJECT_ROOT / ".setup_done"
+        if new_setup_ver:
+            marker.write_text(new_setup_ver, encoding="utf-8")
+        else:
+            marker.unlink(missing_ok=True)   # 讓精靈重新判斷
+
+        _cb("完成")
         return True
 
     except Exception:

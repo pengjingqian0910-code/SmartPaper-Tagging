@@ -347,17 +347,26 @@ def _apply_pending_update():
 
     import shutil, tempfile, zipfile
     try:
-        # 顯示簡易提示視窗
+        # ── 建立進度視窗 ──────────────────────────────────────────────
         root = tk.Tk()
         root.withdraw()
         msg = tk.Toplevel(root)
         msg.title("SmartPaper 更新中")
-        msg.geometry("340x80")
+        msg.geometry("360x100")
         msg.resizable(False, False)
-        tk.Label(msg, text="正在套用更新，請稍候…", font=("Segoe UI", 11),
-                 pady=20).pack()
+        status_lbl = tk.Label(msg, text="正在解壓更新檔…",
+                              font=("Segoe UI", 11), pady=10)
+        status_lbl.pack()
+        prog = ttk.Progressbar(msg, mode="indeterminate", length=300)
+        prog.pack(pady=4)
+        prog.start(12)
         msg.update()
 
+        def _set(txt: str):
+            status_lbl.config(text=txt)
+            msg.update()
+
+        # ── 1. 解壓並覆蓋程式碼 ───────────────────────────────────────
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             with zipfile.ZipFile(update_zip) as zf:
@@ -384,10 +393,27 @@ def _apply_pending_update():
         update_zip.unlink(missing_ok=True)
         update_ready.unlink(missing_ok=True)
 
-        # 讀取新版本號
+        # ── 2. 重新安裝套件（新版可能有新依賴）─────────────────────────
+        _set("正在更新 Python 套件（可能需 1–3 分鐘）…")
+        result = subprocess.run(
+            [str(_VENV_PIP), "install", "-r", str(REQ_FILE),
+             "--disable-pip-version-check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(PROJECT_DIR),
+        )
+        if result.returncode != 0:
+            # 安裝失敗不阻止啟動，但記錄到 log 讓使用者知道
+            log_path = PROJECT_DIR / "_update_pip_error.log"
+            log_path.write_text(result.stdout + result.stderr, encoding="utf-8")
+
+        # ── 3. 更新 .setup_done 版本號 ────────────────────────────────
+        MARKER_FILE.write_text(SETUP_VERSION, encoding="utf-8")
+
+        # ── 4. 讀取新版本號並通知 ─────────────────────────────────────
         ver_file = PROJECT_DIR / "version.txt"
         new_ver  = ver_file.read_text(encoding="utf-8").strip() if ver_file.exists() else "?"
 
+        prog.stop()
         msg.destroy()
         root.destroy()
         messagebox.showinfo("更新完成", f"已更新至 v{new_ver}，即將啟動程式。")

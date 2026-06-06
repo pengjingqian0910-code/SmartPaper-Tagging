@@ -49,7 +49,7 @@ if [ ! -f "$PYTHON" ] || [ "$SAVED_VER" != "$SETUP_VERSION" ]; then
         echo ">>> 套用更新中..."
         "$PYTHON" -c "
 from smartpaper.services.updater import apply_pending_update
-apply_pending_update()
+apply_pending_update(progress_callback=lambda s: print('   ', s))
 print('    更新完成')
 "
     fi
