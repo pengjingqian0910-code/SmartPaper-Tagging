@@ -1,16 +1,33 @@
+# SmartPaper-Tagging 依賴清單
+# Python 3.11+ 或 3.12+ 建議
+# 安裝：pip install -r requirements.txt
+
+# ── 資料處理 ─────────────────────────────────────────────────────
 openpyxl>=3.1.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
-google-genai>=2.0.0
-chromadb>=0.4.0
-pydantic>=2.0.0
 python-dotenv>=1.0.0
 rich>=13.0.0
 tqdm>=4.65.0
-flet==0.24.0
+
+# ── AI / LLM ──────────────────────────────────────────────────────
+# google-genai 1.x（注意：2.0 尚未發布，請勿升級）
+google-genai>=1.5.0,<2.0.0
+
+# ── 向量 / 搜尋 ───────────────────────────────────────────────────
+# chromadb 1.x（0.x 與 1.x API 不相容）
+chromadb>=1.0.0
 sentence-transformers>=2.7.0
 rank-bm25>=0.2.2
-pyvis>=0.3.2
+
+# ── PDF 解析 ──────────────────────────────────────────────────────
 pdfplumber>=0.10.0
 pymupdf4llm>=0.0.17
+
+# ── 視覺化 ────────────────────────────────────────────────────────
+pyvis>=0.3.2
+
+# ── UI 框架（版本需嚴格對齊，不同 minor 版本 API 不相容）─────────
+flet==0.82.2
+pydantic>=2.0.0

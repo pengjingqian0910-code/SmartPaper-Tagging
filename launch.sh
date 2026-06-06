@@ -11,9 +11,14 @@ VENV=".venv"
 PYTHON="$VENV/bin/python"
 PIP="$VENV/bin/pip"
 MARKER=".setup_done"
+SETUP_VERSION="3"   # 與 setup_and_run.py 保持同步；版本不符自動重裝
 
-# ── 首次安裝 ────────────────────────────────────────────────────────────
-if [ ! -f "$MARKER" ] || [ ! -f "$PYTHON" ]; then
+# ── 首次安裝 / 版本更新 ──────────────────────────────────────────────────
+SAVED_VER=""
+[ -f "$MARKER" ] && SAVED_VER=$(cat "$MARKER")
+
+if [ ! -f "$PYTHON" ] || [ "$SAVED_VER" != "$SETUP_VERSION" ]; then
+    [ "$SAVED_VER" != "$SETUP_VERSION" ] && [ -f "$MARKER" ] && rm -f "$MARKER"
     echo "=== SmartPaper 初次設定 ==="
 
     # 建立虛擬環境
@@ -49,7 +54,7 @@ print('    更新完成')
 "
     fi
 
-    touch "$MARKER"
+    echo "$SETUP_VERSION" > "$MARKER"
     echo ""
     echo "=== 設定完成，即將啟動 SmartPaper ==="
 fi

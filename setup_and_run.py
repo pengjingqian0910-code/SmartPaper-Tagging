@@ -27,6 +27,10 @@ MARKER_FILE  = PROJECT_DIR / ".setup_done"
 ENV_FILE     = PROJECT_DIR / ".env"
 REQ_FILE     = PROJECT_DIR / "requirements.txt"
 
+# 每次 requirements.txt 有重大版本升級時，遞增此數字
+# 讓已安裝過的使用者也會觸發重新安裝
+SETUP_VERSION = "3"
+
 # 品牌色
 BG       = "#1E1B4B"
 PANEL    = "#2D2A6E"
@@ -41,7 +45,20 @@ ERROR    = "#F87171"
 # ─── 工具函式 ─────────────────────────────────────────────────────────────────
 
 def is_setup_done() -> bool:
-    return MARKER_FILE.exists() and VENV_PYTHON.exists()
+    """
+    回傳 True 代表無需重裝。
+    需同時滿足：venv 存在、.setup_done 版本號與 SETUP_VERSION 相符。
+    版本不符時自動刪除 .setup_done，讓精靈重新執行安裝步驟。
+    """
+    if not VENV_PYTHON.exists():
+        return False
+    if not MARKER_FILE.exists():
+        return False
+    saved_ver = MARKER_FILE.read_text(encoding="utf-8").strip()
+    if saved_ver != SETUP_VERSION:
+        MARKER_FILE.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def launch_app():
@@ -272,8 +289,8 @@ class SetupWizard:
             write_env_key(api_key)
             self._log_q("    完成 ✓")
 
-            # 建立完成標記
-            MARKER_FILE.write_text("setup_done\n", encoding="utf-8")
+            # 建立完成標記（寫入版本號，下次可比對是否需要重裝）
+            MARKER_FILE.write_text(SETUP_VERSION, encoding="utf-8")
             self._setup_ok = True
 
             self._ui(lambda: self._progress.stop())
