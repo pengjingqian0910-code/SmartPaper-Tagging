@@ -12,7 +12,21 @@
 - 強化物理引擎（avoidOverlap + 更強排斥力）
 """
 
+import atexit
 import hashlib
+import html as _html
+
+_temp_graph_files: set = set()
+
+def _cleanup_temp_graphs():
+    for p in list(_temp_graph_files):
+        try:
+            from pathlib import Path as _P
+            _P(p).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+atexit.register(_cleanup_temp_graphs)
 import json
 import pickle
 import tempfile
@@ -254,11 +268,11 @@ class KnowledgeGraphService:
             color = tag_color.get(paper.tags[0], "#8ecae6")
         cite_count = paper.citation_count or 0
         size = max(12, min(40, 12 + cite_count // 5))
-        venue_str = f"\n📰 {paper.venue}" if paper.venue else ""
+        venue_str = f"\n📰 {_html.escape(paper.venue)}" if paper.venue else ""
         year_str = f" ({paper.year})" if paper.year else ""
-        tags_str = f"\n🏷 {', '.join(paper.tags[:3])}" if paper.tags else ""
+        tags_str = f"\n🏷 {', '.join(_html.escape(t) for t in paper.tags[:3])}" if paper.tags else ""
         cite_str = f"\n📊 引用 {cite_count} 次" if cite_count else ""
-        tooltip = f"<b>{paper.title}</b>{year_str}{venue_str}{tags_str}{cite_str}"
+        tooltip = f"<b>{_html.escape(paper.title)}</b>{year_str}{venue_str}{tags_str}{cite_str}"
         net.add_node(paper.id, label=_truncate(paper.title), title=tooltip, color=color, size=size)
 
     def _save_and_return(self, net, output_path: Optional[str], prefix: str) -> str:
@@ -268,6 +282,7 @@ class KnowledgeGraphService:
             tmp = tempfile.NamedTemporaryFile(suffix=".html", prefix=f"smartpaper_{prefix}_", delete=False)
             path = Path(tmp.name)
             tmp.close()
+            _temp_graph_files.add(str(path))  # 程式結束時自動清除
         net.save_graph(str(path))
         return str(path)
 
@@ -541,6 +556,7 @@ class KnowledgeGraphService:
             )
             html_path = Path(tmp.name)
             tmp.close()
+            _temp_graph_files.add(str(html_path))
 
         net.save_graph(str(html_path))
 

@@ -70,10 +70,13 @@ def check_for_update() -> Optional[dict]:
         local_ver  = get_local_version()
 
         if _version_gt(remote_ver, local_ver):
+            zipball_url = data.get("zipball_url", "")
+            if not _is_safe_update_url(zipball_url):
+                return None   # 異常 URL，拒絕更新
             return {
                 "version":  remote_ver,
                 "tag":      remote_tag,
-                "url":      data.get("zipball_url", ""),
+                "url":      zipball_url,
                 "notes":    data.get("body", "（無說明）"),
                 "html_url": data.get("html_url", ""),
             }
@@ -85,12 +88,35 @@ def check_for_update() -> Optional[dict]:
 # ── 下載更新 ────────────────────────────────────────────────────────────
 
 
+_ALLOWED_UPDATE_HOSTS = (
+    "api.github.com",
+    "codeload.github.com",
+    "github.com",
+    "objects.githubusercontent.com",
+)
+
+
+def _is_safe_update_url(url: str) -> bool:
+    """確認下載網址屬於 GitHub，防止被重導向到惡意伺服器。"""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        return (parsed.scheme in ("https",) and
+                any(parsed.netloc == h or parsed.netloc.endswith("." + h)
+                    for h in _ALLOWED_UPDATE_HOSTS))
+    except Exception:
+        return False
+
+
 def download_update(url: str, progress_callback=None) -> bool:
     """
     下載 release zipball 至 _update.zip，並建立 _update_ready 標記。
     progress_callback(pct: float) 每個 chunk 呼叫一次（0.0–1.0）。
     成功回傳 True。
     """
+    if not _is_safe_update_url(url):
+        return False
+
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": "SmartPaper-Updater/1.0"}

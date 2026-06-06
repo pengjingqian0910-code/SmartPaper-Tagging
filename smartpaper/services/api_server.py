@@ -39,7 +39,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+
+        # 拒絕非 localhost 來源（防止惡意網頁 CSRF 攻擊本地 API）
+        if not self._is_local_origin():
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self._write({"error": "forbidden"})
+            return
+
+        # 限制請求大小（防止惡意大型 payload）
         length = int(self.headers.get("Content-Length", 0))
+        if length > 1024 * 1024:  # 1 MB 上限
+            self.send_response(413)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self._write({"error": "request too large"})
+            return
+
         body = self.rfile.read(length) if length else b"{}"
 
         self.send_response(200)
@@ -91,9 +108,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._write({"success": False, "error": str(exc)})
 
     # ── 工具 ────────────────────────────────────────────────────────
+    def _is_local_origin(self) -> bool:
+        """只允許來自 localhost / 127.0.0.1 的請求，阻止外部網站 CSRF。"""
+        origin = self.headers.get("Origin", "")
+        referer = self.headers.get("Referer", "")
+        # 若無 Origin/Referer（直接程式呼叫）→ 允許
+        if not origin and not referer:
+            return True
+        allowed = ("http://localhost", "http://127.0.0.1",
+                   "https://localhost", "https://127.0.0.1")
+        return origin.startswith(allowed) or referer.startswith(allowed)
+
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        # 只回應來自 localhost 的跨源請求（Bookmarklet 需要）
+        origin = self.headers.get("Origin", "")
+        if origin.startswith(("http://localhost", "http://127.0.0.1")):
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     def _write(self, obj: dict):
