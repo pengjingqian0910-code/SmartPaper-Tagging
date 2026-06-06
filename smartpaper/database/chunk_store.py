@@ -64,18 +64,24 @@ class ChunkStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chunks_paper ON paper_chunks(paper_id)"
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_chunks_parent ON paper_chunks(parent_chunk_id)"
-            )
-            # 為舊資料做 schema migration（已有 table 但缺少新欄位）
+            # 用 PRAGMA table_info 確認欄位是否存在，再決定是否 ALTER
+            existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(paper_chunks)")
+            }
             for col, definition in [
                 ("parent_chunk_id", "INTEGER DEFAULT NULL"),
-                ("chunk_level",     "TEXT DEFAULT 'large'"),
+                ("chunk_level",     "TEXT    DEFAULT 'large'"),
             ]:
-                try:
-                    conn.execute(f"ALTER TABLE paper_chunks ADD COLUMN {col} {definition}")
-                except Exception:
-                    pass   # column already exists
+                if col not in existing_cols:
+                    conn.execute(
+                        f"ALTER TABLE paper_chunks ADD COLUMN {col} {definition}"
+                    )
+            # parent index（建立前先確認欄位存在）
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_parent "
+                "ON paper_chunks(parent_chunk_id)"
+            )
             conn.commit()
 
     # ── Write ────────────────────────────────────────────────────────────
