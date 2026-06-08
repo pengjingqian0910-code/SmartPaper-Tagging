@@ -870,9 +870,9 @@ class PapersView:
 
         # 閱讀狀態篩選
         if self._status_filter == "starred":
-            papers = [p for p in papers if p.starred]
+            papers = [p for p in papers if getattr(p, "starred", False)]
         elif self._status_filter in ("unread", "reading", "read"):
-            papers = [p for p in papers if p.read_status == self._status_filter]
+            papers = [p for p in papers if getattr(p, "read_status", "unread") == self._status_filter]
 
         reverse = (self._sort_dir == -1)
         key = self._sort_by
@@ -1671,21 +1671,23 @@ class PapersView:
         ) if has_fulltext else ft.Container(width=0)
 
         # 緊湊星號（用 Container+Icon 代替 IconButton 以節省高度）
+        _starred = getattr(p, "starred", False)
         star_ctrl = ft.Container(
-            content=ft.Icon("star" if p.starred else "star_border",
+            content=ft.Icon("star" if _starred else "star_border",
                             size=14,
-                            color="#F59E0B" if p.starred else "#D1D5DB"),
+                            color="#F59E0B" if _starred else "#D1D5DB"),
             on_click=lambda e, pp=p: self._on_toggle_star(pp),
             padding=ft.padding.all(2),
             border_radius=4,
-            tooltip="取消星號" if p.starred else "加星號",
+            tooltip="取消星號" if _starred else "加星號",
         )
 
         # 閱讀狀態 chip（點擊循環切換）
         _sc = {"unread": ("未讀", "#6366F1", "#EEF2FF"),
                "reading": ("閱讀中", "#0369A1", "#DBEAFE"),
                "read": ("已讀", "#059669", "#DCFCE7")}
-        slabel, scolor, sbg = _sc.get(p.read_status, ("未讀", "#6366F1", "#EEF2FF"))
+        _read_status = getattr(p, "read_status", "unread")
+        slabel, scolor, sbg = _sc.get(_read_status, ("未讀", "#6366F1", "#EEF2FF"))
         status_chip = ft.Container(
             content=ft.Text(slabel, size=8, color=scolor),
             bgcolor=sbg,
@@ -1699,7 +1701,7 @@ class PapersView:
         note_dot = (
             ft.Container(width=6, height=6, bgcolor="#A78BFA",
                          border_radius=10, tooltip="有個人筆記")
-            if p.personal_note else ft.Container(width=0)
+            if getattr(p, "personal_note", "") else ft.Container(width=0)
         )
 
         # ── 3 行緊湊佈局 ─────────────────────────────────────────────
@@ -1729,9 +1731,9 @@ class PapersView:
             ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             height=100,
             padding=ft.padding.symmetric(horizontal=14, vertical=8),
-            border=ft.border.all(1, "#FEF3C7" if p.starred else BORDER),
+            border=ft.border.all(1, "#FEF3C7" if _starred else BORDER),
             border_radius=10,
-            bgcolor="#FFFBEB" if p.starred else CARD,
+            bgcolor="#FFFBEB" if _starred else CARD,
             shadow=ft.BoxShadow(blur_radius=3, spread_radius=0,
                                 color="#06000000", offset=ft.Offset(0, 1)),
         )
@@ -1814,27 +1816,29 @@ class PapersView:
         star_btn_ref: list = [None]
 
         def _rebuild_star():
-            star_btn_ref[0].icon = "star" if paper.starred else "star_border"
-            star_btn_ref[0].icon_color = "#F59E0B" if paper.starred else "#CBD5E1"
-            star_btn_ref[0].tooltip = "取消星號" if paper.starred else "加星號"
+            _s = getattr(paper, "starred", False)
+            star_btn_ref[0].icon = "star" if _s else "star_border"
+            star_btn_ref[0].icon_color = "#F59E0B" if _s else "#CBD5E1"
+            star_btn_ref[0].tooltip = "取消星號" if _s else "加星號"
             try:
                 star_btn_ref[0].update()
             except Exception:
                 self.page.update()
 
         def _toggle_star_dialog(_e):
-            paper.starred = not paper.starred
+            paper.starred = not getattr(paper, "starred", False)
             self._sqlite.update_paper_star(paper.id, paper.starred)
             _rebuild_star()
             self._load_papers(self.selected_tag, self._search_q)
             self._refresh_list()
             self.page.update()
 
+        _s0 = getattr(paper, "starred", False)
         star_icon_btn = ft.IconButton(
-            icon="star" if paper.starred else "star_border",
-            icon_color="#F59E0B" if paper.starred else "#CBD5E1",
+            icon="star" if _s0 else "star_border",
+            icon_color="#F59E0B" if _s0 else "#CBD5E1",
             icon_size=22,
-            tooltip="取消星號" if paper.starred else "加星號",
+            tooltip="取消星號" if _s0 else "加星號",
             on_click=_toggle_star_dialog,
         )
         star_btn_ref[0] = star_icon_btn

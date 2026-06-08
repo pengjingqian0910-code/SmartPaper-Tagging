@@ -160,6 +160,63 @@ class ClassifyView:
             spacing=8, wrap=True, visible=False,
         )
 
+        # 重新設定按鈕（分類完成後顯示，讓使用者能折疊展開設定）
+        self._reconfig_btn = ft.TextButton(
+            text="重新設定",
+            icon="tune",
+            on_click=self._toggle_config_panel,
+            visible=False,
+            style=ft.ButtonStyle(color=ft.colors.BLUE_600),
+        )
+
+        # ── Step 1 & 2 容器（分類後可收合）──────────────────────
+        self._step1_container = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Text("Step 1", size=10, weight=ft.FontWeight.W_600,
+                            color="#4F46E5"),
+                    ft.Text("輸入分類主題", size=13,
+                            weight=ft.FontWeight.W_600),
+                ], spacing=8),
+                ft.Row([self.topic_input, self.add_topic_btn],
+                       alignment=ft.MainAxisAlignment.START),
+                ft.Column([
+                    ft.Text("已選主題：", size=11, color=ft.colors.GREY_600),
+                    self.topics_row,
+                ], spacing=4),
+                ft.Row([
+                    self.suggest_btn,
+                    ft.Text("或讓 AI 根據你的文獻庫自動建議主題",
+                            size=11, color=ft.colors.GREY_500),
+                ], spacing=8),
+            ], spacing=10),
+            padding=16,
+            border=ft.border.all(1, "#E5E7EB"),
+            border_radius=10,
+            bgcolor="#FFFFFF",
+        )
+
+        self._step2_container = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Text("Step 2", size=10, weight=ft.FontWeight.W_600,
+                            color="#4F46E5"),
+                    ft.Text("選擇分類設定", size=13,
+                            weight=ft.FontWeight.W_600),
+                ], spacing=8),
+                ft.Row([
+                    self.skill_dropdown,
+                    self.method_dropdown,
+                    self.include_summary_checkbox,
+                ], spacing=16, wrap=True),
+                self.method_hint,
+            ], spacing=8),
+            padding=16,
+            border=ft.border.all(1, "#E5E7EB"),
+            border_radius=10,
+            bgcolor="#FFFFFF",
+        )
+
         # 組裝介面
         return ft.Column(
             [
@@ -175,54 +232,8 @@ class ClassifyView:
                 # 步驟進度
                 self._step_indicator,
 
-                # ── Step 1: 主題輸入 ──────────────────────────────
-                ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Text("Step 1", size=10, weight=ft.FontWeight.W_600,
-                                    color="#4F46E5"),
-                            ft.Text("輸入分類主題", size=13,
-                                    weight=ft.FontWeight.W_600),
-                        ], spacing=8),
-                        ft.Row([self.topic_input, self.add_topic_btn],
-                               alignment=ft.MainAxisAlignment.START),
-                        ft.Column([
-                            ft.Text("已選主題：", size=11, color=ft.colors.GREY_600),
-                            self.topics_row,
-                        ], spacing=4),
-                        ft.Row([
-                            self.suggest_btn,
-                            ft.Text("或讓 AI 根據你的文獻庫自動建議主題",
-                                    size=11, color=ft.colors.GREY_500),
-                        ], spacing=8),
-                    ], spacing=10),
-                    padding=16,
-                    border=ft.border.all(1, "#E5E7EB"),
-                    border_radius=10,
-                    bgcolor="#FFFFFF",
-                ),
-
-                # ── Step 2: 分類設定 ──────────────────────────────
-                ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Text("Step 2", size=10, weight=ft.FontWeight.W_600,
-                                    color="#4F46E5"),
-                            ft.Text("選擇分類設定", size=13,
-                                    weight=ft.FontWeight.W_600),
-                        ], spacing=8),
-                        ft.Row([
-                            self.skill_dropdown,
-                            self.method_dropdown,
-                            self.include_summary_checkbox,
-                        ], spacing=16, wrap=True),
-                        self.method_hint,
-                    ], spacing=8),
-                    padding=16,
-                    border=ft.border.all(1, "#E5E7EB"),
-                    border_radius=10,
-                    bgcolor="#FFFFFF",
-                ),
+                self._step1_container,
+                self._step2_container,
 
                 # ── Step 3: 執行 ──────────────────────────────────
                 ft.Container(
@@ -232,6 +243,7 @@ class ClassifyView:
                                     color="#4F46E5"),
                             ft.Text("開始分類", size=13,
                                     weight=ft.FontWeight.W_600),
+                            self._reconfig_btn,
                         ], spacing=8),
                         ft.Row([
                             self.classify_btn,
@@ -252,7 +264,7 @@ class ClassifyView:
 
                 ft.Divider(height=1, color="#E5E7EB"),
 
-                # 結果區
+                # 結果區（expand=True 填滿剩餘空間）
                 ft.Container(
                     content=self.results_container,
                     expand=True,
@@ -380,6 +392,14 @@ class ClassifyView:
             self.progress_ring.visible = False
             self.page.update()
 
+    def _toggle_config_panel(self, e):
+        """分類完成後切換 Step 1 & 2 的顯示/隱藏"""
+        is_visible = self._step1_container.visible
+        self._step1_container.visible = not is_visible
+        self._step2_container.visible = not is_visible
+        self._reconfig_btn.text = "收合設定" if not is_visible else "重新設定"
+        self.page.update()
+
     def run_classification(self, e):
         """執行分類（背景執行緒，UI 保持可互動）"""
         if not self.topics:
@@ -406,8 +426,12 @@ class ClassifyView:
         self.sort_toggle_btn.visible = False
         self.sync_tags_btn.visible = False
         self._view_seg.visible = False
+        self._reconfig_btn.visible = False
         self._current_report = None
         self._sort_by_citation = False
+        # 收合 Step 1 & 2，讓結果區有更多空間
+        self._step1_container.visible = False
+        self._step2_container.visible = False
         # 步驟指示器：進入 Step 3
         self._step_indicator.controls = self._build_step_indicator(2).controls
         self.page.update()
@@ -446,6 +470,8 @@ class ClassifyView:
                 self.sort_toggle_btn.visible = True
                 self.sync_tags_btn.visible = True
                 self._view_seg.visible = True
+                self._reconfig_btn.visible = True
+                self._reconfig_btn.text = "重新設定"
                 # 步驟指示器：完成
                 self._step_indicator.controls = self._build_step_indicator(3).controls
 

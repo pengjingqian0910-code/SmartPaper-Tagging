@@ -211,6 +211,218 @@ SmartPaper-Tagging/
 
 ---
 
+## 常見問題排查
+
+以下依照**使用者實際操作流程**逐步列出，每個步驟出問題時對應的症狀與解法。
+
+---
+
+### 步驟 1｜執行 `setup_and_run.py`（或 `launch.sh`）時出錯
+
+#### ❌ 視窗一閃即逝，什麼都沒發生
+Windows 環境下，用**滑鼠右鍵 → 以系統管理員身分執行**；或改用命令提示字元執行以看到錯誤訊息：
+```cmd
+cd C:\你的路徑\SmartPaper-Tagging
+python setup_and_run.py
+```
+
+#### ❌ `'python' is not recognized`（Windows）
+Python 未加入 PATH。重新安裝 Python，安裝時務必勾選 **「Add Python to PATH」**。  
+確認方式：`python --version`，應顯示 3.11.x 或 3.12.x。
+
+#### ❌ Python 版本錯誤（顯示 2.x 或 3.9 以下）
+電腦可能有多個 Python 版本。改用明確版本呼叫：
+```bash
+python3.11 setup_and_run.py   # macOS/Linux
+py -3.11 setup_and_run.py     # Windows，需要 Python Launcher
+```
+
+#### ❌ `Permission denied`（macOS / Linux）
+```bash
+chmod +x launch.sh
+bash launch.sh
+```
+
+---
+
+### 步驟 2｜建立虛擬環境（venv）失敗
+
+#### ❌ `Error: [Errno 28] No space left on device`
+磁碟空間不足。SmartPaper 含 ML 模型共需約 **3 GB**。清出空間後重試。
+
+#### ❌ `The virtual environment was not created successfully` 或 `ensurepip`
+部分 Linux 系統缺少 venv 模組：
+```bash
+sudo apt install python3.11-venv python3.11-dev
+```
+
+#### ❌ 防毒軟體（如 Windows Defender）彈出警告或阻擋
+將 SmartPaper-Tagging 資料夾加入防毒軟體「排除清單」後重試。Python 腳本建立 venv 時會觸發部分防毒規則。
+
+---
+
+### 步驟 3｜安裝套件（pip install）失敗
+
+#### ❌ `Connection timeout` / `Could not fetch URL`
+網路連線或 PyPI 被封鎖，改用鏡像源：
+```bash
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+#### ❌ `error: Microsoft Visual C++ 14.0 or greater is required`（Windows）
+前往 [visualstudio.microsoft.com/visual-cpp-build-tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) 安裝「C++ 建置工具」工作負載，完成後重新執行 `setup_and_run.py`。
+
+#### ❌ `ModuleNotFoundError: No module named '_tkinter'`（macOS）
+```bash
+brew install python-tk@3.11
+```
+
+#### ❌ 安裝到一半中斷，再次執行仍然卡住
+刪除虛擬環境資料夾後重新建立：
+```bash
+rm -rf .venv        # macOS/Linux
+rmdir /s /q .venv   # Windows cmd
+python setup_and_run.py
+```
+
+---
+
+### 步驟 4｜輸入 Gemini API Key
+
+#### ❌ 不知道去哪裡取得
+前往 [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) 免費申請，登入 Google 帳號後點擊「建立 API 金鑰」即可。
+
+#### ❌ 貼入後提示「Key 無效」
+- 確認複製時沒有多餘空白或換行
+- 確認是 **Google AI Studio** 的 Key（不是 Google Cloud API Key）
+
+#### ❌ 安裝精靈結束後想修改 Key
+編輯專案根目錄的 `.env` 檔（用記事本或任何文字編輯器開啟）：
+```
+GEMINI_API_KEY=貼上你的新Key
+```
+或進入程式後前往「設定」頁修改。
+
+> ⚠️ `.env` 格式注意：等號兩側**不要加空格**，Key 不要用引號包住。
+
+---
+
+### 步驟 5｜建立桌面捷徑後，日後點擊無反應
+
+#### ❌ 雙擊捷徑沒反應，或提示「找不到目標」
+專案資料夾被移動過，捷徑路徑失效。重新執行一次：
+```bash
+python setup_and_run.py
+```
+安裝精靈會重新建立正確路徑的捷徑。
+
+#### ❌ Windows：捷徑閃一下就關掉
+右鍵捷徑 → 屬性 → 目標，確認路徑格式正確，例如：
+```
+C:\...\SmartPaper-Tagging\.venv\Scripts\python.exe C:\...\SmartPaper-Tagging\main.py ui
+```
+
+---
+
+### 步驟 6｜程式啟動，但停在載入畫面很久（首次）
+
+**這是正常現象。** 首次啟動需從 HuggingFace 下載 ML 模型（約 500 MB）：
+- `allenai-specter`（向量嵌入）
+- `cross-encoder/ms-marco-MiniLM-L-6-v2`（搜尋重排）
+
+耐心等待 5–20 分鐘（視網速而定）。下載完成後，後續啟動約 10–30 秒。
+
+#### ❌ 超過 30 分鐘仍在載入，或出現 `ConnectionError`
+`huggingface.co` 可能被封鎖（中國大陸常見）。在 `.env` 中加入：
+```
+HF_ENDPOINT=https://hf-mirror.com
+```
+存檔後重新啟動。
+
+---
+
+### 步驟 7｜視窗開啟後顯示異常
+
+#### ❌ 視窗全黑或白色，沒有任何內容
+Flet 渲染引擎問題，嘗試關閉硬體加速：
+```bash
+# Windows
+set LIBGL_ALWAYS_SOFTWARE=1 && python main.py ui
+
+# macOS / Linux
+LIBGL_ALWAYS_SOFTWARE=1 python main.py ui
+```
+
+#### ❌ `Address already in use`（Port 衝突）
+上次程式沒有正常關閉，本地 Port 仍被占用。**重新開機**後再試；或在工作管理員結束所有 `python` 程序。
+
+#### ❌ macOS：「無法開啟，因為開發者身分無法驗證」
+```bash
+xattr -rd com.apple.quarantine /path/to/SmartPaper-Tagging
+```
+或前往「系統設定 → 隱私權與安全性」，點擊「仍要開啟」。
+
+---
+
+### 步驟 8｜程式開啟後，AI 功能沒有回應
+
+#### ❌ 標籤生成、問答都沒有輸出
+前往「設定」頁，點擊「測試連線」：
+- 🟢 綠色勾 → API Key 正常，請改在 GitHub 回報問題
+- 🔴 紅色叉 → API Key 有問題，重新貼入後再測試
+
+#### ❌ 測試連線顯示 `429 Resource exhausted`
+免費方案每分鐘有請求次數限制。等待 1 分鐘後再試，或至 Google AI Studio 升級方案。
+
+#### ❌ 測試連線顯示 `Connection failed`
+網路防火牆封鎖了 `generativelanguage.googleapis.com`。企業或學校環境需申請開放此網域，或使用個人熱點測試。
+
+---
+
+### 步驟 9｜使用功能時遇到問題
+
+#### 搜尋沒有結果
+1. 文獻庫為空 → 先至首頁匯入論文
+2. 刪除 `data/bm25_cache.pkl` 重新啟動（BM25 索引重建）
+3. 刪除 `data/chroma/` 資料夾重新啟動（向量庫重建）
+
+#### ChromaDB 錯誤（SQLite 版本過舊）
+```
+RuntimeError: Your system has an unsupported version of sqlite3
+```
+常見於 Ubuntu 20.04 等舊版 Linux：
+```bash
+pip install pysqlite3-binary
+```
+然後在 `smartpaper/database/vector_db.py` 最上方加入這兩行：
+```python
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+```
+
+#### PDF 全文匯入失敗
+
+| 症狀 | 原因 | 解決方式 |
+|---|---|---|
+| 「PDF 無法提取文字（共 0 字元）」 | 掃描版 PDF（純圖片） | 先用 Adobe Acrobat 或 tesseract OCR 處理後再上傳 |
+| 「PDF 開啟失敗」 | 檔案有密碼保護 | 先解除密碼保護 |
+| 解析結果亂碼 | 特殊字型嵌入問題 | `pip install pymupdf` 後重試，會自動啟用備用解析引擎 |
+| 上傳成功但無法搜尋到全文內容 | 向量化未完成 | 在論文詳細頁點擊「重新匯入 PDF」 |
+
+---
+
+### 仍然無法解決？
+
+請在 GitHub Issues 回報，並附上以下資訊，方便快速定位問題：
+
+1. **作業系統**：Windows 11 / macOS 14.x / Ubuntu 22.04…
+2. **Python 版本**：`python --version` 的輸出
+3. **卡在哪個步驟**：對照上方步驟 1–9
+4. **完整錯誤訊息**：請複製貼上文字，勿截圖
+
+---
+
 ## 自動更新
 
 開啟程式後進入「設定」頁面，點擊「檢查更新」。若有新版本，會顯示版本號與更新說明，確認後自動下載並於下次啟動時套用（含重新安裝套件）。

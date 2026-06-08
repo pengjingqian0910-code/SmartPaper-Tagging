@@ -11,6 +11,7 @@ from ..database.chunk_store import ChunkStore
 from ..database.sqlite_db import SQLiteDB
 from ..database.vector_db import VectorDB
 from ..processing.pdf_parser import parse_pdf, ParsedChunk
+from ..processing.math_annotator import annotate_chunks, math_density
 
 
 @dataclass
@@ -20,6 +21,7 @@ class IngestionResult:
     table_chunks: int = 0
     sections: list[str] = field(default_factory=list)
     total_pages: int = 0
+    math_annotated_chunks: int = 0   # 被公式標注的 chunk 數量
     error: Optional[str] = None
 
     @property
@@ -42,10 +44,14 @@ class PDFIngestionService:
         sqlite_db: Optional[SQLiteDB] = None,
         vector_db: Optional[VectorDB] = None,
         chunk_store: Optional[ChunkStore] = None,
+        gemini_api_key: Optional[str] = None,
+        gemini_model: Optional[str] = None,
     ):
         self.sqlite_db = sqlite_db or SQLiteDB()
         self.vector_db = vector_db or VectorDB()
         self.chunk_store = chunk_store or ChunkStore()
+        self._gemini_api_key = gemini_api_key
+        self._gemini_model = gemini_model
 
     def ingest(
         self,
@@ -104,6 +110,26 @@ class PDFIngestionService:
         result.table_chunks = parse_result.table_count
         n = len(parse_result.chunks)
         _prog(f"找到 {n} 個 chunk，{parse_result.total_pages} 頁，存入資料庫...")
+
+        # ── 數學公式語義化標注（若有 API Key 且論文含數學）──────────
+        api_key = self._gemini_api_key or _get_gemini_key()
+        if api_key:
+            all_text = " ".join(c.text for c in parse_result.chunks)
+            if math_density(all_text) > 0.01:
+                _prog("偵測到數學公式，進行語義化標注...")
+                from .. import config as _cfg
+                model = self._gemini_model or _cfg.GEMINI_MODEL
+                try:
+                    result.math_annotated_chunks = annotate_chunks(
+                        parse_result.chunks,
+                        api_key=api_key,
+                        model=model,
+                        progress_callback=_prog,
+                    )
+                    if result.math_annotated_chunks:
+                        _prog(f"已標注 {result.math_annotated_chunks} 個含公式 chunk")
+                except Exception as e:
+                    print(f"[PDFIngestion] 數學標注失敗（跳過）：{e}")
 
         # ── 儲存 large chunks（Section 級別，現有行為）──────────────
         chunk_dicts = [
@@ -226,7 +252,16 @@ class PDFIngestionService:
             print(f"[PDFIngestion] small chunk 向量化失敗: {e}")
 
 
-# ── module-level helper ───────────────────────────────────────────────
+# ── module-level helpers ─────────────────────────────────────────────
+
+def _get_gemini_key() -> Optional[str]:
+    """從 config 讀取 Gemini API Key（避免循環 import）。"""
+    try:
+        from .. import config as _cfg
+        return _cfg.GEMINI_API_KEY or None
+    except Exception:
+        return None
+
 
 def _split_to_small_chunks(
     text: str,

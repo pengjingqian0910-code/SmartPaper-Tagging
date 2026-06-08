@@ -375,7 +375,7 @@ class SearchService:
         使用 multiplicative boost 避免推爆上限。
         """
         for r in results:
-            if r.paper.starred:
+            if getattr(r.paper, "starred", False):
                 # +12% of remaining headroom
                 r.score = r.score + (1.0 - r.score) * 0.12
             elif getattr(r.paper, "read_status", "unread") == "read":
@@ -444,8 +444,8 @@ class SearchService:
             ]
         else:
             candidates = [
-                {"paper": r.paper, "document":
-                 f"{r.paper.title}. {(r.paper.abstract or '')[:300]}"}
+                {"paper": r["paper"], "document":
+                 f"{r['paper'].title}. {(r['paper'].abstract or '')[:300]}"}
                 for r in all_ranked_lists[0]
             ] if all_ranked_lists else []
 

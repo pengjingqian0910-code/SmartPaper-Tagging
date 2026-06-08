@@ -855,7 +855,7 @@ class HomeView:
 
         def run():
             try:
-                # 取前 3 個最常見標籤作為查詢關鍵字
+                # 取出現頻率前 3 高的標籤作為查詢（固定順序，確保快取命中）
                 papers = self._sqlite.get_all(limit=1000)
                 from collections import Counter
                 tag_counter: Counter = Counter()
@@ -863,13 +863,14 @@ class HomeView:
                     for t in (p.tags or []):
                         tag_counter[t] += 1
 
-                import random
                 top_candidates = [t for t, _ in tag_counter.most_common(10)]
                 if not top_candidates:
                     self._arxiv_status.value = "⚠️ 尚無標籤，請先匯入並標記論文"
                     self._arxiv_status.color = T.ROSE
                     return
-                top_tags = random.sample(top_candidates, min(3, len(top_candidates)))
+                # 固定取前 3 名（不隨機），讓相同文獻庫每次產生相同查詢字串
+                # → arXiv 10 分鐘 TTL 快取能有效命中，避免重複打 API
+                top_tags = top_candidates[:3]
 
                 # 若標籤含非 ASCII 字元（中文等），透過 Gemini 翻成英文關鍵字
                 has_non_ascii = any(not t.isascii() for t in top_tags)
@@ -969,6 +970,14 @@ class HomeView:
                 self._arxiv_status.value = f"❌ 查詢失敗：{ex}"
                 self._arxiv_status.color = T.ROSE
             finally:
+                # 10 秒冷卻：防止連點重複打 arXiv API
+                import time as _time
+                for remaining in range(10, 0, -1):
+                    self._arxiv_btn.text = f"冷卻 {remaining}s"
+                    self._arxiv_btn.disabled = True
+                    self.page.update()
+                    _time.sleep(1)
+                self._arxiv_btn.text = "取得推薦"
                 self._arxiv_btn.disabled = False
                 self.page.update()
 

@@ -309,7 +309,7 @@ class WritingGuideView:
                 "#DC2626"
             )
             return ft.Row([
-                ft.Text(label, size=11, color=_C_META, width=110),
+                ft.Text(label, size=11, color=_C_META, width=130),
                 ft.Row(
                     [
                         ft.Container(
@@ -354,23 +354,24 @@ class WritingGuideView:
                     ft.Icon("assessment", size=15, color="#6366F1"),
                     ft.Text("Draft Evaluation Report", size=13,
                             weight=ft.FontWeight.W_600, color="#4338CA"),
+                    ft.Text("草稿評估報告", size=10, color="#94A3B8"),
                 ], spacing=6),
                 ft.Text(ev.overall_summary, size=12, color=_C_TITLE),
                 ft.Divider(height=4, color="#C7D2FE"),
-                _score_bar("Academic Tone",    ev.academic_score,  "#6366F1"),
-                _score_bar("Clarity",          ev.clarity_score,   "#6366F1"),
-                _score_bar("Citation Adequacy", ev.citation_score, "#6366F1"),
+                _score_bar("Academic Tone\n學術語氣",     ev.academic_score,  "#6366F1"),
+                _score_bar("Clarity\n清晰度",             ev.clarity_score,   "#6366F1"),
+                _score_bar("Citation Adequacy\n引用充足度", ev.citation_score, "#6366F1"),
                 ft.Divider(height=4, color="#C7D2FE"),
                 _list_section(
-                    "check_circle", "Strengths", ev.strengths,
+                    "check_circle", "Strengths  優點", ev.strengths,
                     "#16A34A", "#F0FDF4", "#BBF7D0",
                 ),
                 _list_section(
-                    "warning_amber", "Issues Found", ev.issues,
+                    "warning_amber", "Issues Found  發現問題", ev.issues,
                     "#DC2626", "#FEF2F2", "#FECACA",
                 ),
                 _list_section(
-                    "auto_fix_high", "What Polish Will Improve",
+                    "auto_fix_high", "What Polish Will Improve  潤色改善點",
                     ev.expected_improvements,
                     "#7C3AED", "#F5F3FF", "#DDD6FE",
                 ),
@@ -441,11 +442,12 @@ class WritingGuideView:
                     ft.Icon("compare_arrows", size=14, color=violet),
                     ft.Text("Before / After", size=13,
                             weight=ft.FontWeight.W_600, color=violet),
+                    ft.Text("修改前後對比", size=10, color="#94A3B8"),
                 ], spacing=6),
                 ft.Row([
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("Original Draft", size=11,
+                            ft.Text("Original Draft  原始草稿", size=11,
                                     color=_C_META, weight=ft.FontWeight.W_600),
                             ft.Container(
                                 content=ft.Text(original, size=12, color="#374151",
@@ -461,7 +463,7 @@ class WritingGuideView:
                     ft.Container(width=12),
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("Polished Version", size=11,
+                            ft.Text("Polished Version  潤色版本", size=11,
                                     color=violet, weight=ft.FontWeight.W_600),
                             ft.Container(
                                 content=ft.Text(result.polished_text, size=12,
@@ -517,9 +519,10 @@ class WritingGuideView:
                         ft.Icon("rate_review", size=14, color=violet),
                         ft.Text("Sentence-Level Annotations", size=13,
                                 weight=ft.FontWeight.W_600, color=violet),
+                        ft.Text("逐句批注", size=10, color="#94A3B8"),
                         _chip(f"{len(result.sentence_notes)} notes", violet),
                     ], spacing=6),
-                    ft.Text("Red = original  ·  Green = improved  ·  Grey = reason",
+                    ft.Text("Red = original 原文  ·  Green = improved 改寫  ·  Grey = reason 理由",
                             size=10, color=_C_META),
                     *note_rows,
                 ], spacing=8),
@@ -548,13 +551,13 @@ class WritingGuideView:
                                     size=10, color=_C_META),
                         ], spacing=6),
                         ft.Row([
-                            ft.Text("Where:", size=10, color=_C_META,
+                            ft.Text("Where: 建議位置", size=10, color=_C_META,
                                     weight=ft.FontWeight.W_600),
                             ft.Text(cs.location_hint, size=10,
                                     color=_C_TITLE, expand=True),
                         ], spacing=4),
                         ft.Row([
-                            ft.Text("Tags:", size=10, color=_C_META,
+                            ft.Text("Reason: 相關原因", size=10, color=_C_META,
                                     weight=ft.FontWeight.W_600),
                             ft.Text(cs.relevance_reason, size=10,
                                     color=_C_META, expand=True),
@@ -572,9 +575,10 @@ class WritingGuideView:
                         ft.Icon("add_link", size=14, color=teal),
                         ft.Text("Citation Suggestions from Library", size=13,
                                 weight=ft.FontWeight.W_600, color=teal),
+                        ft.Text("文庫引用建議", size=10, color="#94A3B8"),
                         _chip(f"{len(result.citation_suggestions)} papers", teal),
                     ], spacing=6),
-                    ft.Text("Papers in your library relevant to this text's key topics",
+                    ft.Text("文獻庫中與此段落主題相關的論文",
                             size=10, color=_C_META),
                     *cite_rows,
                 ], spacing=8),
@@ -592,7 +596,7 @@ class WritingGuideView:
                 alt_rows.append(ft.Container(
                     content=ft.Column([
                         ft.Row([
-                            ft.Text("You cited:", size=10, color=_C_META,
+                            ft.Text("You cited: 你引用了", size=10, color=_C_META,
                                     weight=ft.FontWeight.W_600),
                             ft.Container(
                                 content=ft.Text(alt.cited_ref, size=10,
@@ -603,7 +607,7 @@ class WritingGuideView:
                         ], spacing=6),
                         ft.Row([
                             ft.Icon("swap_horiz", size=12, color="#D97706"),
-                            ft.Text("Library alternative:", size=10,
+                            ft.Text("Library alternative: 文庫替代", size=10,
                                     color=_C_META, weight=ft.FontWeight.W_600),
                             ft.Text(
                                 f"{alt.paper.title[:55]}{'…' if len(alt.paper.title) > 55 else ''} ({alt.paper.year or '?'})",
@@ -625,9 +629,10 @@ class WritingGuideView:
                         ft.Icon("swap_horiz", size=14, color="#D97706"),
                         ft.Text("Library Alternatives for Detected Citations", size=13,
                                 weight=ft.FontWeight.W_600, color="#92400E"),
+                        ft.Text("引用替代建議", size=10, color="#94A3B8"),
                         _chip(f"{len(result.alternative_papers)} found", "#D97706"),
                     ], spacing=6),
-                    ft.Text("Citations detected in your draft — your library may have better-fit papers",
+                    ft.Text("草稿中偵測到的引用 — 文庫中可能有更適合的論文",
                             size=10, color=_C_META),
                     *alt_rows,
                 ], spacing=8),
@@ -901,6 +906,7 @@ class WritingGuideView:
                                 ft.Icon("edit_note", size=13, color="#1D4ED8"),
                                 ft.Text("Writing Example", size=11, color="#1E40AF",
                                         weight=ft.FontWeight.W_600),
+                                ft.Text("AI 寫作示例句", size=9, color="#94A3B8"),
                             ], spacing=4),
                             ft.Container(
                                 content=ft.Text(
@@ -1030,6 +1036,7 @@ class WritingGuideView:
                                 ft.Text("Synthesized Paragraph", size=11,
                                         color="#0F766E",
                                         weight=ft.FontWeight.W_600),
+                                ft.Text("整合引用段落", size=9, color="#94A3B8"),
                             ], spacing=4),
                             ft.Container(
                                 content=ft.Text(
@@ -1060,9 +1067,10 @@ class WritingGuideView:
             content=ft.Column([
                 ft.Row([
                     ft.Icon("auto_stories", color=color, size=15),
-                    ft.Text("Synthesized Literature Review",
-                            size=13, weight=ft.FontWeight.W_600, color="#0D9488"),
-                    ft.Text("— all cited papers woven into cohesive paragraphs",
+                    ft.Text("Synthesized Literature Review", size=13,
+                            weight=ft.FontWeight.W_600, color="#0D9488"),
+                    ft.Text("文獻回顧整合", size=10, color="#94A3B8"),
+                    ft.Text("— 所有引用論文整合為完整段落",
                             size=11, color=_C_META),
                 ], spacing=6),
                 *cards,

@@ -13,6 +13,9 @@ from ..models import Paper
 
 _DEFAULT_CACHE = Path("data/bm25_cache.pkl")
 
+# 每次 Paper 新增欄位時遞增，讓舊快取自動失效
+_CACHE_VERSION = 2
+
 
 class BM25Index:
     """BM25Okapi 索引，對標題 + 摘要全文建索引"""
@@ -34,8 +37,10 @@ class BM25Index:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "wb") as f:
-                pickle.dump({"papers": self._papers, "bm25": self._bm25}, f,
-                            protocol=pickle.HIGHEST_PROTOCOL)
+                pickle.dump(
+                    {"version": _CACHE_VERSION, "papers": self._papers, "bm25": self._bm25},
+                    f, protocol=pickle.HIGHEST_PROTOCOL,
+                )
         except Exception:
             pass  # 持久化失敗不影響搜尋
 
@@ -46,7 +51,17 @@ class BM25Index:
                 return False
             with open(path, "rb") as f:
                 data = pickle.load(f)
-            self._papers = data["papers"]
+            # 版本檢查：Paper 新增欄位後舊快取自動失效
+            if data.get("version") != _CACHE_VERSION:
+                path.unlink(missing_ok=True)
+                return False
+            papers = data["papers"]
+            # 防禦性屬性檢查：若 Paper 缺少新欄位則視為過時快取
+            _required = ("starred", "read_status", "personal_note")
+            if papers and any(not hasattr(p, attr) for p in papers[:1] for attr in _required):
+                path.unlink(missing_ok=True)
+                return False
+            self._papers = papers
             self._bm25 = data["bm25"]
             return True
         except Exception:
